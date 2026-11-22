@@ -485,6 +485,20 @@ describe('serversView', () => {
     expect(hasAttr(tagOf(dialog, 'server-delete-go-edge')!, 'disabled')).toBe(true);
     expect(bareDisplayOnHidden(out)).toBe(false);
   });
+
+  test('escapes a hostile server name in the dialog title, label and data-name without leaking a raw character', () => {
+    const name = 'a&b"<';
+    const escaped = 'a&amp;b&quot;&lt;';
+    const out = serversView(en, [{ ...servers[1]!, name }], 'csrf-1').__html;
+    const dialog = /<dialog[\s\S]*?<\/dialog>/.exec(out)?.[0] ?? '';
+    expect(dialog).not.toBe('');
+    expect(inputTag(dialog, 'confirm_name')).toContain(`data-name="${escaped}"`);
+    expect(dialog).toMatch(/<h2[^>]*>[^<]*Delete server a&amp;b&quot;&lt;\?<\/h2>/);
+    expect(dialog).toContain(`Type ${escaped} to confirm`);
+    expect(out).not.toContain(name);
+    expect(out).not.toMatch(/a&(?!amp;)/);
+    expect(out).not.toMatch(/b"</);
+  });
 });
 
 describe('envFormView', () => {
