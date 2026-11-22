@@ -133,7 +133,7 @@ export function opProgressView(i: I18n, opId: string, steps: { label: string; do
     doneSeconds === null
       ? html`<h2 class="my-1 text-2xl font-bold">${tr(i, 'rb.running')}</h2>`
       : html`<h2 class="my-1 text-2xl font-bold text-ok" data-testid="rollback-done" data-seconds="${doneSeconds}">${tr(i, 'rb.done', { s: i.unit(doneSeconds, 'second') })}</h2>`;
-  // routes/ui.ts extracts the step items with /<ul class="steps" id="steps">/; Preflight already gives the list no bullets or padding.
+  // routes/ui.ts extracts the step items with /<ul class="steps" id="steps">/.
   return html`<div class="in p-5" data-testid="panel">${head}<ul class="steps" id="steps">${steps.map(
     (s) => html`<li class="${s.done ? "py-0.5 text-ink before:text-ok before:content-['✓_']" : 'py-0.5 text-mute'}">${s.label}</li>`,
   )}</ul>${doneSeconds === null && watchOperation(opId)}</div>`;
