@@ -30,3 +30,7 @@ export const raw = (s: string): Html => ({ __html: s });
 export const tr = (i: I18n, key: string, params?: Record<string, string | number>): Html => raw(i.t(key, params));
 
 export const codeText = (i: I18n, code: string, params: Record<string, string | number> = {}): Html => raw(codeMessage(i, code, params));
+
+export const fontLinks: Html = raw(
+  '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap">',
+);

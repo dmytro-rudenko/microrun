@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import rateLimit from '@fastify/rate-limit';
-import { negotiate } from '@microrun/core/i18n';
+import { isLang, webLang, type Lang } from '@microrun/core/i18n';
 import type { Config } from './config.ts';
 import { hashToken, newToken } from './crypto.ts';
 import type { Repo } from './db/repo.ts';
@@ -29,7 +29,12 @@ export interface AuthDeps {
 
 const COOKIE = 'mr_session';
 const SESSION_MS = 12 * 60 * 60 * 1000;
+export const LANG_COOKIE_MAX_AGE_S = 31_536_000;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+export function setLangCookie(reply: FastifyReply, lang: Lang, secure: boolean): void {
+  reply.setCookie('mr_lang', lang, { path: '/', maxAge: LANG_COOKIE_MAX_AGE_S, sameSite: 'lax', httpOnly: true, secure });
+}
 
 const minimalLogin: RenderLogin = ({ error }) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>microrun</title></head><body><form method="post" action="/login">${
@@ -95,10 +100,17 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps): void {
     reply
       .code(status)
       .type('text/html; charset=utf-8')
-      .send(render({ error, csrf: req.csrfToken || undefined, lang: negotiate(req.cookies.mr_lang, req.headers['accept-language']) }));
+      .send(render({ error, csrf: req.csrfToken || undefined, lang: webLang(req.cookies.mr_lang) }));
 
   app.register(async (s) => {
-    s.get('/login', async (req, reply) => page(reply, 200, false, req));
+    s.get<{ Querystring: { lang?: unknown } }>('/login', async (req, reply) => {
+      const lang = req.query.lang;
+      if (isLang(lang)) {
+        setLangCookie(reply, lang, config.secureCookies);
+        req.cookies.mr_lang = lang;
+      }
+      return page(reply, 200, false, req);
+    });
 
     const loginLimit = {
       max: 5,

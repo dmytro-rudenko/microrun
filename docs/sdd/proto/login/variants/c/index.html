@@ -1,0 +1,69 @@
+<title>microrun вхід C</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: { bg:'var(--bg)', surface:'var(--surface)', field:'var(--field)', ink:'var(--ink)', mute:'var(--mute)', line:'var(--line)', accent:'var(--accent)', 'on-accent':'var(--on-accent)', prod:'var(--prod)', 'prod-soft':'var(--prod-soft)' },
+  fontFamily: { sans:['Inter','system-ui','sans-serif'], display:['"Space Grotesk"','Inter','system-ui','sans-serif'], mono:['"JetBrains Mono"','ui-monospace','monospace'] },
+} } };
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Full-bleed isometric container yard behind the page; floating form card anchored right */
+:root{--bg:#e9eef7;--surface:#fff;--field:#f6f8fb;--ink:#151a22;--mute:#5b6676;--line:#d5dce6;--accent:#2f6feb;--on-accent:#fff;--ring:rgba(47,111,235,.22);--prod:#c62828;--prod-soft:#fdecea;
+  --box-a:#c9d7f5;--box-b:#a9c0f0;--box-c:#8aa8ea;--box-p:#f3b8b8;--yard:#dfe6f2}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0b1119;--surface:#141b24;--field:#0f151c;--ink:#e6edf3;--mute:#8b96a5;--line:#283342;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--box-a:#1b2a44;--box-b:#223659;--box-c:#2a4370;--box-p:#5a2930;--yard:#101826;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0b1119;--surface:#141b24;--field:#0f151c;--ink:#e6edf3;--mute:#8b96a5;--line:#283342;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--box-a:#1b2a44;--box-b:#223659;--box-c:#2a4370;--box-p:#5a2930;--yard:#101826;color-scheme:dark}
+body{background:var(--bg);color:var(--ink)}
+.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--ring)}
+.lift{animation:lift 5s ease-in-out infinite}
+@keyframes lift{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}
+@media (prefers-reduced-motion:reduce){.lift{animation:none}}
+</style>
+
+<div class="relative min-h-screen overflow-hidden font-sans">
+  <svg id="yard" class="absolute inset-0 w-full h-full hidden md:block" preserveAspectRatio="xMinYMid slice" viewBox="0 0 1200 800" aria-hidden="true"></svg>
+
+  <div class="relative min-h-screen flex flex-col md:flex-row items-center md:justify-end gap-10 py-12" style="padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))">
+    <div class="hidden md:block absolute left-12 top-10 lg:left-16 max-w-md">
+      <div class="font-display text-2xl font-bold">microrun</div>
+      <p class="mt-2 text-mute [text-wrap:balance]">Ваші середовища — як контейнери на причалі: видно кожне, prod позначено червоним.</p>
+    </div>
+
+    <div class="w-full max-w-[420px] md:mr-[6vw] rounded-2xl border border-line bg-surface p-8 shadow-[0_30px_80px_-20px_rgba(15,30,70,.35)]">
+      <div class="md:hidden font-display text-xl font-bold mb-6">microrun</div>
+      <h1 class="font-display text-2xl font-bold">Вхід</h1>
+      <p class="mt-1 text-sm text-mute">Продовжіть до дошки середовищ.</p>
+      <form id="f" class="mt-7 flex flex-col gap-5" novalidate>
+        <div id="err" hidden role="alert" class="rounded-lg bg-prod-soft px-4 py-3 text-sm text-prod">Невірний логін або пароль.</div>
+        <div class="relative">
+          <input id="username" autocomplete="username" required placeholder=" " class="inp peer block w-full rounded-lg border border-line bg-field px-3.5 pb-2.5 pt-5 text-sm text-ink transition">
+          <label for="username" class="pointer-events-none absolute left-3.5 top-3.5 text-sm text-mute transition-all peer-focus:top-1.5 peer-focus:text-xs peer-focus:text-accent peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:text-xs">Логін</label>
+        </div>
+        <div class="relative">
+          <input id="password" type="password" autocomplete="current-password" required placeholder=" " class="inp peer block w-full rounded-lg border border-line bg-field px-3.5 pb-2.5 pt-5 text-sm text-ink transition">
+          <label for="password" class="pointer-events-none absolute left-3.5 top-3.5 text-sm text-mute transition-all peer-focus:top-1.5 peer-focus:text-xs peer-focus:text-accent peer-[:not(:placeholder-shown)]:top-1.5 peer-[:not(:placeholder-shown)]:text-xs">Пароль</label>
+        </div>
+        <button class="rounded-lg bg-accent px-5 py-3 text-sm font-semibold text-on-accent hover:opacity-90 focus:outline-none focus:ring-4 focus:ring-[color:var(--ring)]">Увійти</button>
+        <p class="text-xs text-mute">Демо: пароль <code class="font-mono">demo</code>.</p>
+      </form>
+    </div>
+  </div>
+</div>
+<script>
+const NS='http://www.w3.org/2000/svg',yard=document.getElementById('yard');
+const iso=(x,y)=>[600+(x-y)*34-380,140+(x+y)*19];
+function box(x,y,h,fill,label,cls){const g=document.createElementNS(NS,'g');if(cls)g.setAttribute('class',cls);
+  const [ax,ay]=iso(x,y),[bx,by]=iso(x+2,y),[cx,cy]=iso(x+2,y+1),[dx,dy]=iso(x,y+1);
+  const top=[[ax,ay-h],[bx,by-h],[cx,cy-h],[dx,dy-h]],poly=(pts,f,o)=>{const p=document.createElementNS(NS,'polygon');p.setAttribute('points',pts.map(q=>q.join(',')).join(' '));p.setAttribute('fill',f);if(o)p.setAttribute('opacity',o);g.append(p);};
+  poly([[dx,dy-h],[cx,cy-h],[cx,cy],[dx,dy]],fill,.85);poly([[bx,by-h],[cx,cy-h],[cx,cy],[bx,by]],fill,.65);poly(top,fill);
+  if(label){const t=document.createElementNS(NS,'text');t.setAttribute('x',(ax+cx)/2-14);t.setAttribute('y',(ay+cy)/2-h+4);t.setAttribute('font-family','JetBrains Mono, monospace');t.setAttribute('font-size','12');t.setAttribute('fill','var(--ink)');t.textContent=label;g.append(t);}
+  yard.append(g);}
+const r=document.createElementNS(NS,'rect');r.setAttribute('width','1200');r.setAttribute('height','800');r.setAttribute('fill','var(--yard)');yard.append(r);
+const cells=[[0,2,'a'],[0,4,'b'],[0,6,'a'],[3,2,'b','dev'],[3,4,'c'],[3,6,'a'],[6,2,'a'],[6,4,'b','stage'],[6,6,'c'],[9,2,'p','prod'],[9,4,'a'],[9,6,'b']];
+for(const [x,y,k,l] of cells)box(x,y,34,`var(--box-${k})`,l);
+box(3,2,74,'var(--box-c)',null,'lift');
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const f=e.target,ins=[...f.querySelectorAll('input')],err=document.getElementById('err');
+  ins.forEach(i=>i.classList.toggle('!border-prod',!i.value));if(ins.some(i=>!i.value))return;
+  const bad=password.value!=='demo';err.hidden=!bad;password.classList.toggle('!border-prod',bad);if(!bad)f.querySelector('button').textContent='Вхід виконано ✓';});
+</script>

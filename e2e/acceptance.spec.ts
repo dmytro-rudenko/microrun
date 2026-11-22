@@ -9,7 +9,7 @@ const SHA_V1 = 'a'.repeat(40);
 const SHA_V2 = 'b'.repeat(40);
 const SHA_V3 = 'c'.repeat(40);
 const SHA_BAD = 'd'.repeat(40);
-const LANGS = ['uk', 'en', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN'];
+const LANGS = ['en', 'uk', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN'];
 const RAW_KEY = /\b(nav|state|rb|cl|codes|settings|hist|env)\.[a-zA-Z]+/;
 
 test.describe.configure({ mode: 'serial' });
@@ -200,4 +200,27 @@ test('UI renders in all 8 languages without raw keys', async () => {
       expect(text, `${lang} ${path}`).not.toMatch(/undefined|NaN/);
     }
   }
+});
+
+test('login page switches language before sign-in', async ({ browser }) => {
+  const ctx = await browser.newContext({ baseURL: MICRORUN_URL });
+  const p = await ctx.newPage();
+  await p.goto('/login');
+  await expect(p.locator('html')).toHaveAttribute('lang', 'en');
+  await p.selectOption('[data-testid=login-lang]', 'uk');
+  await expect(p.locator('html')).toHaveAttribute('lang', 'uk');
+  await ctx.close();
+});
+
+test('a server without environments is deleted through the confirmation dialog', async () => {
+  await page.goto('/settings/servers');
+  await page.fill('[data-testid=server-name]', 'temp-1');
+  await page.click('[data-testid=server-create]');
+  await page.click('[data-testid=server-delete-temp-1]');
+  const go = page.locator('[data-testid=server-delete-go-temp-1]');
+  await expect(go).toBeDisabled();
+  await page.fill('[data-testid=server-delete-name-temp-1]', 'temp-1');
+  await expect(go).toBeEnabled();
+  await go.click();
+  await expect(page.locator('[data-testid=server-row-temp-1]')).toHaveCount(0);
 });
