@@ -176,6 +176,16 @@ describe('login page language', () => {
     expect(res.body).toContain('LOGIN lang=en');
     expect(res.cookies.find((c) => c.name === 'mr_lang')).toBeUndefined();
   });
+
+  it.each([
+    ['a repeated lang parameter', '/login?lang=de&lang=uk'],
+    ['a path-like lang value', '/login?lang=../'],
+  ])('GET /login with %s is ignored', async (_, url) => {
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('LOGIN lang=en');
+    expect(res.cookies.find((c) => c.name === 'mr_lang')).toBeUndefined();
+  });
 });
 
 describe('login with https public URL', () => {
