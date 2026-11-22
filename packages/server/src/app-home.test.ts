@@ -173,7 +173,37 @@ describe('home at 100 environments and 1,000 releases', () => {
   });
 });
 
+describe('home with no environments', () => {
+  it('renders the empty feed and an empty index', async () => {
+    const res = await get('/');
+    expect(res.statusCode).toBe(200);
+    const feed = res.body.slice(res.body.indexOf('data-testid="feed"'), res.body.indexOf('data-testid="env-index"'));
+    expect(feed).toContain('Nothing deployed yet. Deploys from CI appear here.');
+    const index = res.body.slice(res.body.indexOf('data-testid="env-index"'));
+    expect(index).toMatch(/All environments <span[^>]*>0<\/span>/);
+    expect(res.body).not.toContain('data-testid="env-link-');
+    expect(relCount(res.body)).toBe(0);
+  });
+
+  it('leaves the swap of a live search to the search form', async () => {
+    const res = await app.inject({ method: 'GET', url: '/?q=x', headers: { cookie, accept: 'text/html', 'hx-request': 'true', 'hx-target': 'home' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['hx-reswap']).toBeUndefined();
+  });
+});
+
 describe('older releases of one environment', () => {
+  it('renders no show-older button and an empty older page for an environment without releases', async () => {
+    const env = await repo.saveEnv(envInput('bare', 0, false));
+    const page = await get(`/env/${env.id}`);
+    expect(page.statusCode).toBe(200);
+    expect(page.body).toContain('data-testid="env-in-window"');
+    expect(page.body).not.toContain('data-testid="env-older-more"');
+    const older = await get(`/env/${env.id}/older`);
+    expect(older.statusCode).toBe(200);
+    expect(relCount(older.body)).toBe(0);
+  });
+
   it('returns 404 for an unknown environment', async () => {
     expect((await get('/env/unknown/older')).statusCode).toBe(404);
   });

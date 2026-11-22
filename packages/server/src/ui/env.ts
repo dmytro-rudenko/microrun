@@ -64,7 +64,7 @@ export function olderPage(i: I18n, env: EnvVM, rows: ReleaseVM[], rest: number, 
     : olderMore(i, env, rest, next)}`;
 }
 
-const SCROLLSPY = raw(`<script>(function(){var l=document.querySelectorAll('.jump a');if(!('IntersectionObserver' in window))return;var o=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)l.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id)})})},{rootMargin:'-60px 0px -55% 0px'});document.querySelectorAll('main section[id]').forEach(function(s){o.observe(s)})})()</script>`);
+const SCROLLSPY = raw(`<script>(function(){var l=document.querySelectorAll('.jump a'),s=document.querySelectorAll('main section[id]');if(!('IntersectionObserver' in window)||!s.length)return;var t=parseFloat(getComputedStyle(s[0]).scrollMarginTop)||0;var o=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)l.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id)})})},{rootMargin:'-'+t+'px 0px -55% 0px'});s.forEach(function(x){o.observe(x)})})()</script>`);
 
 export function envView(i: I18n, env: EnvVM, _now: number, parts: { settings: Html }): Html {
   const { top, older } = splitReleases(env.releases);

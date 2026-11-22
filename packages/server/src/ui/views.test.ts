@@ -170,14 +170,55 @@ describe('html and raw', () => {
 describe('homeView', () => {
   const i = i18n('en');
 
+  const feedSection = (out: string) => out.slice(out.indexOf('data-testid="feed"'), out.indexOf('data-testid="env-index"'));
+
   test.each([
-    { only: 'prod', q: '', message: 'No production deploys yet.' },
-    { only: 'all', q: '', message: 'Nothing deployed yet. Deploys from CI appear here.' },
-    { only: 'prod', q: 'missing', message: 'No environment, branch or commit matches “missing”.' },
-  ] as const)('shows the right empty feed for only=$only and q="$q"', ({ only, q, message }) => {
+    { only: 'prod', q: '', matches: 1, message: 'No production deploys yet.' },
+    { only: 'all', q: '', matches: 1, message: 'Nothing deployed yet. Deploys from CI appear here.' },
+    { only: 'prod', q: 'missing', matches: 0, message: 'No environment, branch or commit matches “missing”.' },
+    { only: 'all', q: 'missing', matches: 0, message: 'No environment, branch or commit matches “missing”.' },
+    { only: 'prod', q: 'stage', matches: 1, message: 'No production deploys yet.' },
+    { only: 'all', q: 'stage', matches: 1, message: 'Nothing deployed yet. Deploys from CI appear here.' },
+  ] as const)('shows the right empty feed for only=$only, q="$q" and $matches matching envs', ({ only, q, matches, message }) => {
     const vm = homeVmFrom([env('stage')]);
-    const out = homeView(i, { ...vm, only, q, feed: [] }, NOW).__html;
-    expect(out).toContain(message);
+    const out = homeView(i, { ...vm, only, q, feed: [], envs: vm.envs.slice(0, matches) }, NOW).__html;
+    const feed = feedSection(out);
+    expect(feed).toContain(message);
+    if (matches) {
+      expect(feed).not.toContain(i.t('search.none', { q }));
+      expect(feed).not.toContain(i.t('search.clear'));
+    } else {
+      expect(feed).toContain(`<a href="/" class="text-accent underline">${i.t('search.clear')}</a>`);
+    }
+  });
+
+  test('escapes markup in the message, author and environment name of a feed row', () => {
+    const vm = homeVmFrom([env('stage', { releases: [release({ message: EVIL, author: EVIL })] })]);
+    vm.feed[0]!.envName = EVIL;
+    const out = homeView(i, vm, NOW).__html;
+    expect(out).not.toContain('<img');
+    expect(out.split(EVIL_ESCAPED).length - 1).toBeGreaterThanOrEqual(3);
+  });
+
+  const HOSTILE_Q = '"><script>x</script>';
+  const HOSTILE_Q_ESCAPED = '&quot;&gt;&lt;script&gt;x&lt;/script&gt;';
+  const HOSTILE_Q_ENCODED = encodeURIComponent(HOSTILE_Q);
+
+  test('escapes a hostile query in the no-match text', () => {
+    const vm = homeVmFrom([]);
+    const out = homeView(i, { ...vm, q: HOSTILE_Q }, NOW).__html;
+    expect(out).not.toContain('<script>x');
+    expect(out).not.toContain('"><script>');
+    expect(feedSection(out)).toContain(HOSTILE_Q_ESCAPED);
+  });
+
+  test('url-encodes a hostile query in the filter links and the more button', () => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, q: HOSTILE_Q, rest: 1, next: `${NOW}.cursor` }, NOW).__html;
+    expect(out).not.toContain('<script>x');
+    const hrefs = [...out.matchAll(/<a href="(\/\?only=[^"]*)"/g)].map((m) => m[1]);
+    expect(hrefs).toEqual([`/?only=all&q=${HOSTILE_Q_ENCODED}`, `/?only=prod&q=${HOSTILE_Q_ENCODED}`]);
+    expect(tagOf(out, 'feed-more')).toContain(`&q=${HOSTILE_Q_ENCODED}&`);
   });
 
   test('marks an appended feed row current when its release is already open', () => {
@@ -249,7 +290,7 @@ describe('envView', () => {
     expect(releases).toContain('data-testid="rel-stage-');
   });
 
-  test('a production env gets a prod jump nav carrying the PRODUCTION tag', () => {
+  test('a production env gets a prod jump nav carrying the production tag', () => {
     const out = envView(i, env('prod'), NOW, parts).__html;
     expect(tagOf(out, 'env-jump')).toContain('class="jump prod ');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
@@ -318,6 +359,75 @@ describe('envView', () => {
     const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }], storage: { kind: 's3', target: url } });
     const out = envView(i, e, NOW, parts).__html;
     expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  const olderEnv = () => env('stage', {
+    releases: [
+      release({ id: 'r-act', sha: sha('1111111'), state: 'active', deployedAt: NOW - HOUR }),
+      ...Array.from({ length: 25 }, (_, k) => release({ id: `r-old-${k}`, sha: sha(`9${String(k).padStart(2, '0')}`), state: 'expired', deployedAt: NOW - (k + 2) * HOUR, windowLeftMs: null, windowPct: null })),
+    ],
+  });
+
+  test('the first show-older button appends to the older table and is not out-of-band', () => {
+    const out = envView(i, olderEnv(), NOW, parts).__html;
+    expect(out).toContain('<tbody id="older-rows">');
+    const more = tagOf(out, 'env-older-more') ?? '';
+    expect(more).toContain('id="older-more"');
+    expect(more).toContain('hx-get="/env/env-stage/older"');
+    expect(more).toContain('hx-target="#older-rows"');
+    expect(more).toContain('hx-swap="beforeend"');
+    expect(more).not.toContain('hx-swap-oob');
+  });
+
+  test('an older page with more to come replaces the button out of band with the next cursor', () => {
+    const e = olderEnv();
+    const rows = splitReleases(e.releases).older.slice(0, 20);
+    const out = olderPage(i, e, rows, 5, `${NOW}.r-old-19`).__html;
+    expect(out.match(/data-testid="rel-stage-/g)).toHaveLength(20);
+    const more = tagOf(out, 'env-older-more') ?? '';
+    expect(more).toContain('id="older-more"');
+    expect(more).toContain('hx-swap-oob="true"');
+    expect(more).toContain(`hx-get="/env/env-stage/older?before=${encodeURIComponent(`${NOW}.r-old-19`)}"`);
+    expect(more).toContain('hx-target="#older-rows"');
+    expect(more).toContain('hx-swap="beforeend"');
+  });
+
+  test('the last older page removes the button out of band', () => {
+    const e = olderEnv();
+    const out = olderPage(i, e, splitReleases(e.releases).older.slice(20), 0, null).__html;
+    expect(out).toContain('<span id="older-more" hx-swap-oob="true"></span>');
+    expect(out).not.toContain('data-testid="env-older-more"');
+  });
+
+  test('an env with no releases renders no show-older button', () => {
+    const out = envView(i, env('stage', { releases: [] }), NOW, parts).__html;
+    expect(out).toContain('data-testid="env-in-window"');
+    expect(out).not.toContain('data-testid="env-older-more"');
+    expect(out).not.toContain('id="older-more"');
+  });
+
+  test('sections scroll clear of the header and the jump bar, and the scrollspy uses the same offset', () => {
+    const page = layout({ i, title: 'stage', csrf: 'tok', body: envView(i, env('prod'), NOW, parts) });
+    expect.soft(page).toContain('scroll-mt-[calc(var(--jump-top)+52px)]');
+    expect.soft(page).not.toContain('scroll-mt-[var(--jump-top)]');
+    const script = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!).find((s) => s.includes('IntersectionObserver'));
+    expect(script).toBeDefined();
+    let options: { rootMargin?: string } | undefined;
+    const style = { scrollMarginTop: '109px', getPropertyValue: (p: string) => (p.trim() === '--jump-top' ? ' 57px' : '') };
+    const ctx: Record<string, unknown> = {
+      document: {
+        documentElement: {},
+        querySelectorAll: (s: string) => (s.includes('section') ? [{ id: 'releases' }, { id: 'settings' }] : []),
+      },
+      getComputedStyle: () => style,
+      IntersectionObserver: class {
+        constructor(_cb: unknown, o: { rootMargin?: string }) { options = o; }
+        observe() {}
+      },
+    };
+    ctx.window = ctx;
+    runInNewContext(script!, ctx);
+    expect(options?.rootMargin).toBe('-109px 0px -55% 0px');
   });
 
   test('every table cell wraps long text with overflow-wrap:anywhere', () => {
@@ -489,6 +599,18 @@ describe('layout', () => {
     expect(tagOf(layout(searchParams), 'search') ?? '').toContain('value="abc"');
   });
 
+  test('the search input escapes a hostile query in its value', () => {
+    const out = layout({ ...params, q: '"><script>x</script>' });
+    expect(out).not.toContain('<script>x');
+    expect(tagOf(out, 'search') ?? '').toContain('value="&quot;&gt;&lt;script&gt;x&lt;/script&gt;"');
+  });
+
+  test('the header search swaps the whole home region', () => {
+    const formTag = /^<form\b[^>]*>/.exec(searchForm(header))?.[0];
+    expect(formTag).toContain('hx-target="#home"');
+    expect(formTag).toContain('hx-swap="outerHTML"');
+  });
+
   test('the New environment link shows the short label and keeps the full accessible name', () => {
     expect(newEnvLink).toContain(`>${i.t('env.newEnvShort')}</span>`);
     expect(tagOf(newEnvLink, 'env-new')).toContain(`aria-label="${i.t('env.newEnv')}"`);
@@ -639,6 +761,18 @@ describe('cleanupView', () => {
     expect(out).toContain('csrf-token');
   });
 
+  test('only the failed dry-run retry form carries the cleanup-failed testid', () => {
+    const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: {} } });
+    const out = cleanupView(i, r, 'csrf-token').__html;
+    expect(/<form\b[^>]*>/.exec(out)?.[0]).toContain('data-testid="cleanup-failed"');
+    const contract = release({ id: 'r-c', state: 'failed', failNote: { code: 'CONTRACT_FAILED', params: {} } });
+    const panel = panelView(i, env('stage', { releases: [contract] }), contract, 'csrf-token', html``).__html;
+    expect(panel).toContain('data-testid="contract-retry"');
+    const contractForm = [...panel.matchAll(/<form\b[^>]*>/g)].map((m) => m[0]).find((f) => f.includes('/contract/retry'));
+    expect(contractForm).toBeDefined();
+    expect(contractForm).not.toContain('data-testid=');
+  });
+
   test.each(LANGS)('the retry-preview button is labelled from the catalog in %s', (lang) => {
     const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: {} } });
     const out = cleanupView(i18n(lang), r, 'csrf-token').__html;
@@ -757,6 +891,14 @@ describe('panelView', () => {
     expect.soft(out).toContain('<b>Roll back production prod to a1b2c3d?</b>');
     expect.soft(out).toContain(`${yes}Yes, roll back</button>`);
     expect.soft(out).toContain(`${no}Cancel</button>`);
+  });
+
+  test('the production rollback confirm step posts confirm=yes', () => {
+    const current = release({ id: 'r-current', state: 'active', sha: sha('7654321') });
+    const prod = env('prod', { releases: [current, release({ id: 'r-target' })] });
+    const out = panelView(i, prod, current, 'csrf-token', html``).__html;
+    const ask = /<div\b[^>]*data-testid="confirm-ask"[^>]*>[\s\S]*?<\/div>/.exec(out)?.[0] ?? '';
+    expect(ask).toContain('<input type="hidden" name="confirm" value="yes">');
   });
 
   test('for production the confirm step moves focus to Yes and back to the main button', () => {

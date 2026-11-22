@@ -39,7 +39,7 @@ ${select({
 <a href="/env/new" data-testid="env-new" aria-label="${i.t('env.newEnv')}" class="rounded-md bg-accent px-3 py-1.5 font-semibold text-on-accent no-underline hover:opacity-90"><span class="min-[761px]:hidden">${tr(i, 'env.newEnvShort')}</span><span class="max-[761px]:hidden">${tr(i, 'env.newEnv')}</span></a>
 </div></header>
 <script>document.addEventListener('keydown',function(e){if(e.key==='/'&&!/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName)){e.preventDefault();document.querySelector('[data-testid=search]').focus()}})</script>
-<main class="mx-auto min-w-0 max-w-[1320px] px-4 py-5 transition-[margin] duration-200 [&_section[id]]:mt-6 [&_section[id]]:scroll-mt-[var(--jump-top)]">${p.body}</main>
+<main class="mx-auto min-w-0 max-w-[1320px] px-4 py-5 transition-[margin] duration-200 [&_section[id]]:mt-6 [&_section[id]]:scroll-mt-[calc(var(--jump-top)+52px)]">${p.body}</main>
 <aside id="panel" aria-live="polite"></aside>
 </body></html>`.__html;
 }

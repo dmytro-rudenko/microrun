@@ -100,6 +100,17 @@ describe('listRecentReleases', () => {
     expect(p2.rest).toBe(2 * PER_ENV - 50);
   });
 
+  it('does not repeat a release redeployed between two pages', async () => {
+    const p1 = await repo.listRecentReleases({ q: '', productionOnly: false, before: null, limit: 25 });
+    const last = p1.rows.at(-1)!;
+    const shown = p1.rows.slice(0, -1).reduce((a, b) => (b.id < a.id ? b : a));
+    await db('releases').where({ id: shown.id }).update({ deployed_at: 99_999 });
+    const p2 = await repo.listRecentReleases({ q: '', productionOnly: false, before: { at: last.deployedAt, id: last.id }, limit: 25 });
+    expect(p2.rows).toHaveLength(25);
+    const firstIds = new Set(p1.rows.map((r) => r.id));
+    expect(p2.rows.filter((r) => firstIds.has(r.id))).toEqual([]);
+  });
+
   it('breaks deployedAt ties by id so a page boundary skips nothing', async () => {
     await db('releases').update({ deployed_at: 5000 });
     const seen = new Set<string>();

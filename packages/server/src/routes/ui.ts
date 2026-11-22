@@ -426,7 +426,6 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
         });
         return { id, name, isProduction, dot };
       });
-    if (req.headers['hx-target'] === 'home') reply.header('HX-Reswap', 'outerHTML');
     return page(req, reply, i.t('nav.envs'), homeView(i, { ...feed, envs: index }, clock()));
   });
 

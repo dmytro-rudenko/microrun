@@ -116,7 +116,7 @@ export function homeView(i: I18n, vm: HomeVM, now: number): Html {
 <div class="mb-2.5 flex flex-wrap gap-1.5">${(['all', 'prod'] as const).map((value) =>
     html`<a href="/?only=${value}&q=${encodeURIComponent(q.toWellFormed())}" aria-pressed="${String(only === value)}" class="rounded-full border border-line bg-surface px-3 py-0.5 text-sm aria-pressed:border-ink aria-pressed:bg-ink aria-pressed:text-surface">${tr(i, value === 'all' ? 'home.filterAll' : 'home.filterProd')}</a>`,
   )}</div>
-${feed.length ? html`<ul class="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">${feedPage(i, vm, now)}</ul>` : html`<p class="${EMPTY}">${q ? html`${noMatch} <a href="/" class="text-accent underline">${tr(i, 'search.clear')}</a>` : tr(i, only === 'prod' ? 'home.prodEmpty' : 'home.feedEmpty')}</p>`}</section>
+${feed.length ? html`<ul class="divide-y divide-line overflow-hidden rounded-lg border border-line bg-surface">${feedPage(i, vm, now)}</ul>` : html`<p class="${EMPTY}">${q && !envs.length ? html`${noMatch} <a href="/" class="text-accent underline">${tr(i, 'search.clear')}</a>` : tr(i, only === 'prod' ? 'home.prodEmpty' : 'home.feedEmpty')}</p>`}</section>
 <section data-testid="env-index"><h2 class="${HEADING}">${tr(i, 'home.envs')} <span class="font-sans text-sm font-medium">${i.num(envs.length)}</span></h2>
 <div class="flex flex-col gap-3.5">${production[0] && indexGroup(i, production, prodTag(i, production[0]))}${indexGroup(i, other, tr(i, 'home.other'))}${q && !envs.length && html`<p class="${EMPTY}">${noMatch}</p>`}</div></section>
 ${trackOpenRelease}</div>`;

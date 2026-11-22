@@ -65,9 +65,8 @@ ${confirmedAction(i, env, 'approve-destructive', tr(i, 'approve.go'), 'danger', 
   })}</form>`;
 }
 
-function retryForm(url: string, csrf: string, releaseId: string, body: Html, testid: string, label: Html): Html {
-  const formTestid = testid === 'cleanup-retry' ? html` data-testid="cleanup-failed"` : '';
-  return html`<form class="${SECT}"${formTestid} ${post(url, csrf)}>${hidden('releaseId', releaseId)}${body}
+function retryForm(url: string, csrf: string, releaseId: string, body: Html, testid: string, label: Html, formTestid?: string): Html {
+  return html`<form class="${SECT}"${formTestid && html` data-testid="${formTestid}"`} ${post(url, csrf)}>${hidden('releaseId', releaseId)}${body}
 ${button({ block: true, variant: 'ghost', testid, label })}</form>`;
 }
 
@@ -104,7 +103,7 @@ export function cleanupView(i: I18n, r: ReleaseVM, csrf: string): Html {
       ? retryForm(
         '/cleanup/preview', csrf, r.id,
         html`<div class="text-xs text-warn">${codeText(i, f.code, f.params)}</div>`,
-        'cleanup-retry', tr(i, 'cl.retry'),
+        'cleanup-retry', tr(i, 'cl.retry'), 'cleanup-failed',
       )
       : html`<div class="${SECT}" data-testid="cleanup-pending" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="every 2s" hx-swap="innerHTML"><div class="${SMALL}">${tr(i, 'cl.preparing')}</div></div>`;
   }
