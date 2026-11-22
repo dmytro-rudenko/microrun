@@ -160,14 +160,14 @@ describe('renamed texts', () => {
     {
       key: 'state.expired',
       expected: {
-        uk: 'Відкат закрито',
-        en: 'Rollback closed',
-        de: 'Rollback geschlossen',
-        fr: 'Rollback fermé',
-        es: 'Rollback cerrado',
-        'pt-BR': 'Rollback encerrado',
-        pl: 'Wycofanie zamknięte',
-        'zh-CN': '回滚已关闭',
+        uk: 'Вікно закрито',
+        en: 'Window closed',
+        de: 'Fenster geschlossen',
+        fr: 'Fenêtre fermée',
+        es: 'Ventana cerrada',
+        'pt-BR': 'Janela encerrada',
+        pl: 'Okno zamknięte',
+        'zh-CN': '窗口已关闭',
       },
     },
     {

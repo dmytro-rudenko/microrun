@@ -289,7 +289,7 @@ describe('envView', () => {
     const out = envView(i, env('prod'), NOW, parts).__html;
     expect(tagOf(out, 'env-jump')).toContain('class="jump prod ');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
-    expect(nav).toContain('PRODUCTION');
+    expect(nav).toContain(i.t('env.prodTag'));
   });
 
   test('a non-production env gets a plain jump nav without the prod tag', () => {
@@ -298,7 +298,7 @@ describe('envView', () => {
     expect(tag).toContain('class="jump ');
     expect(tag).not.toContain('jump prod');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
-    expect(nav).not.toContain('PRODUCTION');
+    expect(nav).not.toContain(i.t('env.prodTag'));
   });
 
   test('the jump nav links to the releases and settings sections', () => {
