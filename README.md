@@ -7,11 +7,13 @@ without running DDL, and refuses to redeploy a commit that was rolled back.
 
 ## Installation
 
+The server ships as the Docker image [`pctea/microrun`](https://hub.docker.com/r/pctea/microrun) (tags `0.1.0`, `0.1`, `latest`).
+
 ```yaml
 # docker-compose.yml
 services:
   microrun:
-    image: microrun/microrun:1
+    image: pctea/microrun:0.1
     restart: unless-stopped
     env_file: .env
     ports: ["8080:8080"]

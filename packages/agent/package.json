@@ -1,6 +1,6 @@
 {
   "name": "microrun",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "microrun agent and deploy CLI",
   "license": "MIT",
   "author": "dmytro-rudenko",

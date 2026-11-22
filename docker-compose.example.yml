@@ -1,6 +1,6 @@
 services:
   microrun:
-    image: microrun/microrun:1
+    image: pctea/microrun:0.1
     restart: unless-stopped
     env_file: .env
     ports: ["8080:8080"]
