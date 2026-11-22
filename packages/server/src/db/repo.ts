@@ -70,6 +70,9 @@ export interface ReleaseRow extends ReleaseFacts {
   blockedByOp: string | null;
 }
 
+export type FeedRow = ReleaseRow & { envName: string; envIsProduction: boolean };
+export type Cursor = { at: number; id: string };
+
 export interface NewRelease {
   id?: string;
   envId: string;
@@ -146,6 +149,7 @@ const APPROVAL: Shape = { json: ['diff'], bool: [] };
 
 const snake = (k: string) => k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 const camel = (k: string) => k.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
+const escLike = (s: string) => s.replace(/[\\%_]/g, (c) => '\\' + c);
 
 function toDb(obj: object, s: Shape, skip: string[] = []): Record<string, unknown> {
   const out: Record<string, unknown> = {};
@@ -232,6 +236,33 @@ export class Repo {
     return allOf<EnvRow>(this.db('environments').select().orderBy(['position', 'name']), ENV);
   }
 
+  async envStatuses(): Promise<Map<string, { latest: ReleaseRow | null; active: ReleaseRow | null; lastOp: OperationRow | null }>> {
+    return this.tx(async (r) => {
+      const firstIds = (query: Knex.QueryBuilder, timestamp: string) => {
+        const ranked = query.select('id', r.db.raw(
+          'row_number() over (partition by env_id order by ?? desc, id desc) as rn', [timestamp],
+        ));
+        return r.db.select('id').from(ranked.as('ranked')).where('rn', 1);
+      };
+      const byEnv = <T extends { envId: string }>(rows: T[]) => new Map(rows.map((row) => [row.envId, row]));
+
+      const latestIds = firstIds(r.db('releases'), 'deployed_at');
+      const activeIds = firstIds(r.db('releases').where({ state: 'active' }), 'deployed_at');
+      const lastOpIds = firstIds(r.db('operations').whereNotIn('status', ['pending', 'running']), 'started_at');
+
+      const envs = await r.listEnvs();
+      const latest = byEnv(await allOf<ReleaseRow>(r.releases().whereIn('r.id', latestIds), RELEASE));
+      const active = byEnv(await allOf<ReleaseRow>(r.releases().whereIn('r.id', activeIds), RELEASE));
+      const lastOps = byEnv(await allOf<OperationRow>(r.db('operations').whereIn('id', lastOpIds), OPERATION));
+
+      return new Map(envs.map(({ id }) => [id, {
+        latest: latest.get(id) ?? null,
+        active: active.get(id) ?? null,
+        lastOp: lastOps.get(id) ?? null,
+      }]));
+    });
+  }
+
   async getEnv(id: string): Promise<EnvRow | null> {
     return firstOf<EnvRow>(this.db('environments').where({ id }), ENV);
   }
@@ -284,6 +315,43 @@ export class Repo {
 
   async listReleases(envId: string): Promise<ReleaseRow[]> {
     return allOf<ReleaseRow>(this.releases().where('r.env_id', envId).orderBy('r.deployed_at', 'desc'), RELEASE);
+  }
+
+  async listRecentReleases(f: { q: string; productionOnly: boolean; before: Cursor | null; limit: number }): Promise<{ rows: FeedRow[]; rest: number }> {
+    return this.tx(async (r) => {
+      const base = r.releases().select('e.name as env_name', 'e.is_production as env_is_production');
+      if (f.productionOnly) base.where('e.is_production', 1);
+      if (f.q) {
+        const pre = `${escLike(f.q)}%`;
+        const pat = `%${pre}`;
+        base.where((b) => b.whereRaw("e.name like ? escape '\\'", [pat])
+          .orWhereRaw("e.branch like ? escape '\\'", [pat])
+          .orWhereRaw("r.commit_sha like ? escape '\\'", [pre]));
+      }
+      if (f.before) {
+        const { at, id } = f.before;
+        base.whereRaw('(r.deployed_at < ? or (r.deployed_at = ? and r.id < ?))', [at, at, id]);
+      }
+
+      const page = await base.clone()
+        .orderBy([{ column: 'r.deployed_at', order: 'desc' }, { column: 'r.id', order: 'desc' }])
+        .limit(f.limit);
+      const count = await base.clearSelect().count({ n: '*' }).first();
+      const rows = page.map((row: { env_name: string; env_is_production: number }) => ({
+        ...fromDb<ReleaseRow>(row, RELEASE),
+        envName: row.env_name,
+        envIsProduction: !!row.env_is_production,
+      }));
+      return { rows, rest: Math.max(0, Number(count?.n ?? 0) - rows.length) };
+    });
+  }
+
+  async envIdsWithShaPrefix(q: string): Promise<Set<string>> {
+    if (!q) return new Set();
+    const rows = await this.db<{ env_id: string }>('releases')
+      .distinct('env_id')
+      .whereRaw("commit_sha like ? escape '\\'", [`${escLike(q)}%`]);
+    return new Set(rows.map((row) => row.env_id));
   }
 
   async getRelease(id: string): Promise<ReleaseRow | null> {

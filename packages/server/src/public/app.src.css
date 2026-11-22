@@ -27,7 +27,10 @@
   --console-ok: #3fb950;
   --console-accent: #58a6ff;
   --console-warn: #d29922;
+  --jump-top: 57px;
 }
+
+@media (max-width:760px){:root{--jump-top:108px}}
 
 @media (prefers-color-scheme: dark) {
   :root {
@@ -84,14 +87,10 @@
 }
 
 @layer base{button:not(:disabled),[role="button"]:not(:disabled){cursor:pointer}}
-#panel{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .2s,visibility .2s;overflow-y:auto;z-index:5;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
+#panel{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .2s,visibility .2s;overflow-y:auto;z-index:20;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
 #panel:not(:empty){transform:none;visibility:visible}
 #panel:has(.in.prod){border-left:4px solid var(--prod)}
-@media (min-width:1100px){body:has(#panel:not(:empty)) main{margin-right:440px}}
-.tl{position:relative;padding-left:18px}
-.tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
-.rel::before{content:'';position:absolute;left:-18px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--surface)}
-.rel.active::before{background:var(--ok)} .rel.available::before{background:var(--accent)} .rel.blocked::before{background:var(--prod)} .rel.failed::before{background:var(--warn)}
+@media (min-width:1100px){body:has(#panel:not(:empty)) :is(main,header){margin-right:440px}body:has(#panel:not(:empty)) header .top-in{margin-right:0}}
 @keyframes led{50%{opacity:.25}}
 .led{animation:led 1.6s steps(2) infinite}.led:nth-child(2n){animation-delay:.4s}.led:nth-child(3n){animation-delay:.9s}
 @media (prefers-reduced-motion:reduce){.led{animation:none}}

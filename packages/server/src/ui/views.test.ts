@@ -1,13 +1,14 @@
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
-import { boardView } from './board.ts';
-import { envView, newEnvView } from './env.ts';
+import type { EnvVM } from './board.ts';
+import { envView, newEnvView, olderPage, splitReleases } from './env.ts';
 import { releaseHistory } from './history.ts';
+import { homeView, type HomeVM } from './home.ts';
 import { layout } from './layout.ts';
 import { cleanupView, opProgressView, panelView } from './panel.ts';
 
-type EnvVM = Parameters<typeof boardView>[1][number];
 type ReleaseVM = Parameters<typeof panelView>[2];
 type HistoryVM = Parameters<typeof releaseHistory>[1][number];
 
@@ -118,6 +119,23 @@ function env(name: string, over: Partial<EnvVM> = {}): EnvVM {
   };
 }
 
+function homeVmFrom(envs: EnvVM[]): HomeVM {
+  return {
+    q: '',
+    only: 'all',
+    feed: envs.flatMap((e) => e.releases.map((r) => ({
+      ...r,
+      envId: e.id,
+      envName: e.name,
+      isProduction: e.isProduction,
+      schemaChange: r.diff.length > 0,
+    }))),
+    rest: 0,
+    next: null,
+    envs: envs.map(({ id, name, isProduction }) => ({ id, name, isProduction, dot: 'ok' })),
+  };
+}
+
 const tagOf = (out: string, testid: string) =>
   new RegExp(`<[^>]*data-testid="${testid}"[^>]*>`).exec(out)?.[0];
 
@@ -149,110 +167,95 @@ describe('html and raw', () => {
   });
 });
 
-describe('boardView', () => {
+describe('homeView', () => {
   const i = i18n('en');
 
-  test('renders one column per env in the order given, each heading linking to the env page', () => {
-    const out = boardView(i, [env('prod'), env('stage'), env('dev')], NOW).__html;
-    const at = (name: string) => out.indexOf(`data-testid="col-${name}"`);
-    expect(at('prod')).toBeGreaterThanOrEqual(0);
-    expect(at('prod')).toBeLessThan(at('stage'));
-    expect(at('stage')).toBeLessThan(at('dev'));
-    const stageColumn = out.slice(at('stage'), at('dev'));
-    expect(stageColumn).toContain('<a href="/env/env-stage"');
+  const feedSection = (out: string) => out.slice(out.indexOf('data-testid="feed"'), out.indexOf('data-testid="env-index"'));
+
+  test.each([
+    { only: 'prod', q: '', matches: 1, message: 'No production deploys yet.' },
+    { only: 'all', q: '', matches: 1, message: 'Nothing deployed yet. Deploys from CI appear here.' },
+    { only: 'prod', q: 'missing', matches: 0, message: 'No environment, branch or commit matches “missing”.' },
+    { only: 'all', q: 'missing', matches: 0, message: 'No environment, branch or commit matches “missing”.' },
+    { only: 'prod', q: 'stage', matches: 1, message: 'No production deploys yet.' },
+    { only: 'all', q: 'stage', matches: 1, message: 'Nothing deployed yet. Deploys from CI appear here.' },
+  ] as const)('shows the right empty feed for only=$only, q="$q" and $matches matching envs', ({ only, q, matches, message }) => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, only, q, feed: [], envs: vm.envs.slice(0, matches) }, NOW).__html;
+    const feed = feedSection(out);
+    expect(feed).toContain(message);
+    if (matches) {
+      expect(feed).not.toContain(i.t('search.none', { q }));
+      expect(feed).not.toContain(i.t('search.clear'));
+    } else {
+      expect(feed).toContain(`<a href="/" class="text-accent underline">${i.t('search.clear')}</a>`);
+    }
   });
 
-  test('each column links to its environment settings section on the env page', () => {
-    const out = boardView(i, [env('prod'), env('stage')], NOW).__html;
-    expect(out).toContain('href="/env/env-stage#settings" data-testid="env-settings-stage"');
-    expect(out).toContain('href="/env/env-prod#settings" data-testid="env-settings-prod"');
-    expect(tagOf(out, 'env-settings-stage')).not.toContain('/settings/env/');
-    expect(out).toContain(`data-testid="env-settings-stage">${i.t('env.settings')}</a>`);
-  });
-
-  test('the column heading carries no settings link', () => {
-    const out = boardView(i, [env('stage')], NOW).__html;
-    const heading = /<div class="flex items-center justify-between gap-2">.*?<\/div>/s.exec(out)?.[0];
-    expect(heading).toBeDefined();
-    expect(heading).not.toContain('env-settings');
-  });
-
-  test('a release card has testid rel-<env>-<sha7>, data-state and panel wiring', () => {
-    const e = env('stage', {
-      releases: [
-        release({ id: 'r-active', sha: sha('1111111'), state: 'active' }),
-        release({ id: 'r-blocked', sha: sha('2222222'), state: 'blocked', blocked: { at: NOW - HOUR, to: sha('3333333') } }),
-      ],
-    });
-    const out = boardView(i, [e], NOW).__html;
-    const active = tagOf(out, 'rel-stage-1111111');
-    const blocked = tagOf(out, 'rel-stage-2222222');
-    expect(active).toContain('data-state="active"');
-    expect(blocked).toContain('data-state="blocked"');
-    expect(active).toContain('hx-get="/panel/r-active"');
-    expect(active).toContain('hx-target="#panel"');
-  });
-
-  test('warns on the card of an active or available release whose image is not stored, and only there', () => {
-    const warn = i.t('storage.failedWarn');
-    const e = env('stage', {
-      releases: [
-        release({ id: 'r1', sha: sha('1111111'), state: 'active', stored: false }),
-        release({ id: 'r2', sha: sha('2222222'), state: 'available', stored: false }),
-        release({ id: 'r3', sha: sha('3333333'), state: 'available', stored: true }),
-        release({ id: 'r4', sha: sha('4444444'), state: 'expired', stored: false }),
-        release({ id: 'r5', sha: sha('5555555'), state: 'blocked', stored: false }),
-      ],
-    });
-    const out = boardView(i, [e], NOW).__html;
-    const card = (head: string, next?: string) =>
-      out.slice(out.indexOf(`data-testid="rel-stage-${head}"`), next ? out.indexOf(`data-testid="rel-stage-${next}"`) : undefined);
-    expect(card('1111111', '2222222')).toContain(warn);
-    expect(card('2222222', '3333333')).toContain(warn);
-    expect(card('3333333', '4444444')).not.toContain(warn);
-    expect(card('4444444', '5555555')).not.toContain(warn);
-    expect(card('5555555')).not.toContain(warn);
-  });
-
-  test('a commit message with markup is escaped on the card', () => {
-    const e = env('stage', { releases: [release({ message: EVIL })] });
-    const out = boardView(i, [e], NOW).__html;
+  test('escapes markup in the message, author and environment name of a feed row', () => {
+    const vm = homeVmFrom([env('stage', { releases: [release({ message: EVIL, author: EVIL })] })]);
+    vm.feed[0]!.envName = EVIL;
+    const out = homeView(i, vm, NOW).__html;
     expect(out).not.toContain('<img');
-    expect(out).toContain(EVIL_ESCAPED);
+    expect(out.split(EVIL_ESCAPED).length - 1).toBeGreaterThanOrEqual(3);
   });
 
-  test.each(LANGS)('renders in %s without any untranslated catalog key', (lang) => {
-    const li = i18n(lang);
-    const envs = [
-      env('prod', {
-        releases: [
-          release({ id: 'r1', sha: sha('1111111'), state: 'active' }),
-          release({ id: 'r2', sha: sha('2222222'), state: 'available' }),
-          release({ id: 'r3', sha: sha('3333333'), state: 'blocked', blocked: { at: NOW - HOUR, to: sha('1111111') } }),
-          release({ id: 'r4', sha: sha('4444444'), state: 'expired', windowLeftMs: null, windowPct: null }),
-          release({
-            id: 'r5',
-            sha: sha('5555555'),
-            state: 'failed',
-            failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users_email' } },
-            diff: [{ kind: 'drop', object: 'users', detail: 'email' }],
-          }),
-        ],
-      }),
-      env('stage', {
-        agentOnline: false,
-        builtin: true,
-        markerWarnings: [{ svc: 'api', other: 'prod', url: 'postgres://db-host/shop' }],
-      }),
-    ];
-    expectNoRawKeys(lang, 'boardView', boardView(li, envs, NOW, 'r2').__html);
+  const HOSTILE_Q = '"><script>x</script>';
+  const HOSTILE_Q_ESCAPED = '&quot;&gt;&lt;script&gt;x&lt;/script&gt;';
+  const HOSTILE_Q_ENCODED = encodeURIComponent(HOSTILE_Q);
+
+  test('escapes a hostile query in the no-match text', () => {
+    const vm = homeVmFrom([]);
+    const out = homeView(i, { ...vm, q: HOSTILE_Q }, NOW).__html;
+    expect(out).not.toContain('<script>x');
+    expect(out).not.toContain('"><script>');
+    expect(feedSection(out)).toContain(HOSTILE_Q_ESCAPED);
+  });
+
+  test('url-encodes a hostile query in the filter links and the more button', () => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, q: HOSTILE_Q, rest: 1, next: `${NOW}.cursor` }, NOW).__html;
+    expect(out).not.toContain('<script>x');
+    const hrefs = [...out.matchAll(/<a href="(\/\?only=[^"]*)"/g)].map((m) => m[1]);
+    expect(hrefs).toEqual([`/?only=all&q=${HOSTILE_Q_ENCODED}`, `/?only=prod&q=${HOSTILE_Q_ENCODED}`]);
+    expect(tagOf(out, 'feed-more')).toContain(`&q=${HOSTILE_Q_ENCODED}&`);
+  });
+
+  test('marks an appended feed row current when its release is already open', () => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, rest: 1, next: `${NOW}.cursor` }, NOW).__html;
+    const script = /<script>([\s\S]*?)<\/script>/.exec(out)![1]!;
+    const releaseId = 'rel-older';
+    const panel = { firstElementChild: { dataset: { release: releaseId } } };
+    const attributes = new Map<string, string>();
+    const rows = new Map<string, { setAttribute: typeof attributes.set }>();
+    const home = Object.assign(new EventTarget(), {
+      isConnected: true,
+      querySelector: (selector: string) => rows.get(selector) ?? null,
+    });
+    const document = Object.assign(new EventTarget(), {
+      readyState: 'loading',
+      currentScript: { parentElement: home },
+      body: new EventTarget(),
+      getElementById: (id: string) => id === 'panel' ? panel : null,
+    });
+    runInNewContext(script, {
+      document,
+      CSS: { escape: (value: string) => value },
+      MutationObserver: class { observe() {} disconnect() {} },
+    });
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+
+    rows.set(`[data-release="${releaseId}"]`, { setAttribute: attributes.set.bind(attributes) });
+    document.body.dispatchEvent(new Event('htmx:afterSwap'));
+    expect(attributes.get('aria-current')).toBe('true');
   });
 });
 
 describe('envView', () => {
   const i = i18n('en');
 
-  test('renders one row per release with testid rel-<env>-<sha7> and data-state', () => {
+  test('renders two rows in the top table and keeps testid rel-<env>-<sha7> and data-state for each release', () => {
     const e = env('stage', {
       releases: [
         release({ id: 'r-a', sha: sha('1111111'), state: 'active' }),
@@ -260,8 +263,10 @@ describe('envView', () => {
         release({ id: 'r-c', sha: sha('3333333'), state: 'expired', windowLeftMs: null, windowPct: null }),
       ],
     });
-    const out = envView(i, e, NOW, parts).__html;
-    expect(out.match(/data-testid="rel-stage-/g)).toHaveLength(3);
+    const initial = envView(i, e, NOW, parts).__html;
+    const top = /data-testid="env-in-window"[\s\S]*?<\/table>/.exec(initial)?.[0] ?? '';
+    expect(top.match(/data-testid="rel-stage-/g) ?? []).toHaveLength(2);
+    const out = initial + olderPage(i, e, splitReleases(e.releases).older, 0, null).__html;
     expect(tagOf(out, 'rel-stage-1111111')).toContain('data-state="active"');
     expect(tagOf(out, 'rel-stage-2222222')).toContain('data-state="blocked"');
     expect(tagOf(out, 'rel-stage-3333333')).toContain('data-state="expired"');
@@ -285,11 +290,11 @@ describe('envView', () => {
     expect(releases).toContain('data-testid="rel-stage-');
   });
 
-  test('a production env gets a prod jump nav carrying the PRODUCTION tag', () => {
+  test('a production env gets a prod jump nav carrying the production tag', () => {
     const out = envView(i, env('prod'), NOW, parts).__html;
     expect(tagOf(out, 'env-jump')).toContain('class="jump prod ');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
-    expect(nav).toContain('PRODUCTION');
+    expect(nav).toContain(i.t('env.prodTag'));
   });
 
   test('a non-production env gets a plain jump nav without the prod tag', () => {
@@ -298,7 +303,7 @@ describe('envView', () => {
     expect(tag).toContain('class="jump ');
     expect(tag).not.toContain('jump prod');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
-    expect(nav).not.toContain('PRODUCTION');
+    expect(nav).not.toContain(i.t('env.prodTag'));
   });
 
   test('the jump nav links to the releases and settings sections', () => {
@@ -334,7 +339,9 @@ describe('envView', () => {
     const out = envView(i, e, NOW, parts).__html;
     expect(out).not.toContain(secret);
     expect(out).toContain(esc(masked));
-    expect(boardView(i, [e], NOW).__html).not.toContain(secret);
+    const vm = homeVmFrom([e]);
+    vm.envs[0]!.dot = 'mismatch';
+    expect(homeView(i, vm, NOW).__html).not.toContain(secret);
     expect(panelView(i, e, e.releases[0]!, 'csrf-token', html``).__html).not.toContain(secret);
   });
 
@@ -352,6 +359,75 @@ describe('envView', () => {
     const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }], storage: { kind: 's3', target: url } });
     const out = envView(i, e, NOW, parts).__html;
     expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
+  });
+
+  const olderEnv = () => env('stage', {
+    releases: [
+      release({ id: 'r-act', sha: sha('1111111'), state: 'active', deployedAt: NOW - HOUR }),
+      ...Array.from({ length: 25 }, (_, k) => release({ id: `r-old-${k}`, sha: sha(`9${String(k).padStart(2, '0')}`), state: 'expired', deployedAt: NOW - (k + 2) * HOUR, windowLeftMs: null, windowPct: null })),
+    ],
+  });
+
+  test('the first show-older button appends to the older table and is not out-of-band', () => {
+    const out = envView(i, olderEnv(), NOW, parts).__html;
+    expect(out).toContain('<tbody id="older-rows">');
+    const more = tagOf(out, 'env-older-more') ?? '';
+    expect(more).toContain('id="older-more"');
+    expect(more).toContain('hx-get="/env/env-stage/older"');
+    expect(more).toContain('hx-target="#older-rows"');
+    expect(more).toContain('hx-swap="beforeend"');
+    expect(more).not.toContain('hx-swap-oob');
+  });
+
+  test('an older page with more to come replaces the button out of band with the next cursor', () => {
+    const e = olderEnv();
+    const rows = splitReleases(e.releases).older.slice(0, 20);
+    const out = olderPage(i, e, rows, 5, `${NOW}.r-old-19`).__html;
+    expect(out.match(/data-testid="rel-stage-/g)).toHaveLength(20);
+    const more = tagOf(out, 'env-older-more') ?? '';
+    expect(more).toContain('id="older-more"');
+    expect(more).toContain('hx-swap-oob="true"');
+    expect(more).toContain(`hx-get="/env/env-stage/older?before=${encodeURIComponent(`${NOW}.r-old-19`)}"`);
+    expect(more).toContain('hx-target="#older-rows"');
+    expect(more).toContain('hx-swap="beforeend"');
+  });
+
+  test('the last older page removes the button out of band', () => {
+    const e = olderEnv();
+    const out = olderPage(i, e, splitReleases(e.releases).older.slice(20), 0, null).__html;
+    expect(out).toContain('<span id="older-more" hx-swap-oob="true"></span>');
+    expect(out).not.toContain('data-testid="env-older-more"');
+  });
+
+  test('an env with no releases renders no show-older button', () => {
+    const out = envView(i, env('stage', { releases: [] }), NOW, parts).__html;
+    expect(out).toContain('data-testid="env-in-window"');
+    expect(out).not.toContain('data-testid="env-older-more"');
+    expect(out).not.toContain('id="older-more"');
+  });
+
+  test('sections scroll clear of the header and the jump bar, and the scrollspy uses the same offset', () => {
+    const page = layout({ i, title: 'stage', csrf: 'tok', body: envView(i, env('prod'), NOW, parts) });
+    expect.soft(page).toContain('scroll-mt-[calc(var(--jump-top)+52px)]');
+    expect.soft(page).not.toContain('scroll-mt-[var(--jump-top)]');
+    const script = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]!).find((s) => s.includes('IntersectionObserver'));
+    expect(script).toBeDefined();
+    let options: { rootMargin?: string } | undefined;
+    const style = { scrollMarginTop: '109px', getPropertyValue: (p: string) => (p.trim() === '--jump-top' ? ' 57px' : '') };
+    const ctx: Record<string, unknown> = {
+      document: {
+        documentElement: {},
+        querySelectorAll: (s: string) => (s.includes('section') ? [{ id: 'releases' }, { id: 'settings' }] : []),
+      },
+      getComputedStyle: () => style,
+      IntersectionObserver: class {
+        constructor(_cb: unknown, o: { rootMargin?: string }) { options = o; }
+        observe() {}
+      },
+    };
+    ctx.window = ctx;
+    runInNewContext(script!, ctx);
+    expect(options?.rootMargin).toBe('-109px 0px -55% 0px');
   });
 
   test('every table cell wraps long text with overflow-wrap:anywhere', () => {
@@ -463,19 +539,81 @@ describe('releaseHistory', () => {
 
 describe('layout', () => {
   const i = i18n('de');
-  const page = layout({ i, title: 'Environments', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') });
+  const params = { i, title: 'Environments', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') };
+  const page = layout(params);
+  const header = /<header\b[\s\S]*?<\/header>/.exec(page)?.[0] ?? '';
+  const newEnvLink = /<a\b[^>]*\bdata-testid="env-new"[^>]*>[\s\S]*?<\/a>/.exec(header)?.[0] ?? '';
+  const searchForm = (out: string) => /<form\b[^>]*\brole="search"[^>]*>[\s\S]*?<\/form>/.exec(out)?.[0] ?? '';
 
   test('the header has a brand link home and a New environment link to /env/new', () => {
-    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
     expect(header).toMatch(/<a href="\/"[^>]*><b[^>]*>(?:<span[^>]*>[^<]*<\/span>)?microrun<\/b><\/a>/);
-    expect(tagOf(page, 'env-new')).toContain('href="/env/new"');
-    expect(header).toContain(`>${i.t('env.newEnv')}</a>`);
+    expect(tagOf(newEnvLink, 'env-new')).toContain('href="/env/new"');
+    expect(newEnvLink).toContain(`>${i.t('env.newEnv')}<`);
   });
 
   test('the header no longer links to the history or servers pages', () => {
-    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
     expect(header).not.toContain('href="/history"');
     expect(header).not.toContain('href="/settings/servers"');
+  });
+
+  test('the header search submits q and selects the home region', () => {
+    const form = searchForm(header);
+    const formTag = /^<form\b[^>]*>/.exec(form)?.[0];
+    expect(form).toContain('data-testid="search"');
+    expect(tagOf(form, 'search')).toContain('name="q"');
+    expect(formTag).toContain('method="get"');
+    expect(formTag).toContain('action="/"');
+    expect(formTag).toContain('hx-select="#home"');
+  });
+
+  test('live search triggers only when the home region exists', () => {
+    const trigger = /\bhx-trigger="([^"]*)"/.exec(searchForm(header))?.[1];
+    expect(trigger?.split(', ')).toEqual([
+      "input[!!document.getElementById('home')] changed delay:250ms from:find input",
+      "search[!!document.getElementById('home')] from:find input",
+    ]);
+  });
+
+  test('the search form includes only=prod only when the production filter is active', () => {
+    const prodParams = { ...params, only: 'prod' as const };
+    const allParams = { ...params, only: 'all' as const };
+    const form = searchForm(layout(prodParams));
+    expect(form).toContain('<input type="hidden" name="only" value="prod">');
+    expect(/<input\b[^>]*>/.exec(form)?.[0]).toContain('type="search"');
+    expect(searchForm(layout(allParams))).not.toContain('name="only"');
+    expect(searchForm(page)).not.toContain('name="only"');
+  });
+
+  test('the header wraps its content in a 1320 px column', () => {
+    const classes = /^<header\b[^>]*>\s*<div\b[^>]*\bclass="([^"]*)"[^>]*>[\s\S]*<\/div>\s*<\/header>$/.exec(header)?.[1];
+    expect(classes?.split(/\s+/) ?? []).toContain('max-w-[1320px]');
+  });
+
+  test('the main content is capped at 1320 px', () => {
+    const classes = /<main\b[^>]*\bclass="([^"]*)"/.exec(page)?.[1];
+    expect(classes?.split(/\s+/) ?? []).toContain('max-w-[1320px]');
+  });
+
+  test('the search input shows the current query', () => {
+    const searchParams = { ...params, q: 'abc' };
+    expect(tagOf(layout(searchParams), 'search') ?? '').toContain('value="abc"');
+  });
+
+  test('the search input escapes a hostile query in its value', () => {
+    const out = layout({ ...params, q: '"><script>x</script>' });
+    expect(out).not.toContain('<script>x');
+    expect(tagOf(out, 'search') ?? '').toContain('value="&quot;&gt;&lt;script&gt;x&lt;/script&gt;"');
+  });
+
+  test('the header search swaps the whole home region', () => {
+    const formTag = /^<form\b[^>]*>/.exec(searchForm(header))?.[0];
+    expect(formTag).toContain('hx-target="#home"');
+    expect(formTag).toContain('hx-swap="outerHTML"');
+  });
+
+  test('the New environment link shows the short label and keeps the full accessible name', () => {
+    expect(newEnvLink).toContain(`>${i.t('env.newEnvShort')}</span>`);
+    expect(tagOf(newEnvLink, 'env-new')).toContain(`aria-label="${i.t('env.newEnv')}"`);
   });
 
   test('has a lang select offering all 8 languages, the current one selected', () => {
@@ -623,6 +761,18 @@ describe('cleanupView', () => {
     expect(out).toContain('csrf-token');
   });
 
+  test('only the failed dry-run retry form carries the cleanup-failed testid', () => {
+    const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: {} } });
+    const out = cleanupView(i, r, 'csrf-token').__html;
+    expect(/<form\b[^>]*>/.exec(out)?.[0]).toContain('data-testid="cleanup-failed"');
+    const contract = release({ id: 'r-c', state: 'failed', failNote: { code: 'CONTRACT_FAILED', params: {} } });
+    const panel = panelView(i, env('stage', { releases: [contract] }), contract, 'csrf-token', html``).__html;
+    expect(panel).toContain('data-testid="contract-retry"');
+    const contractForm = [...panel.matchAll(/<form\b[^>]*>/g)].map((m) => m[0]).find((f) => f.includes('/contract/retry'));
+    expect(contractForm).toBeDefined();
+    expect(contractForm).not.toContain('data-testid=');
+  });
+
   test.each(LANGS)('the retry-preview button is labelled from the catalog in %s', (lang) => {
     const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: {} } });
     const out = cleanupView(i18n(lang), r, 'csrf-token').__html;
@@ -722,13 +872,33 @@ describe('cleanupView', () => {
 describe('panelView', () => {
   const i = i18n('en');
 
-  test('for production rollback-go asks for confirmation before submitting', () => {
-    const prod = env('prod');
+  test('the panel header links the environment name to its page by ID', () => {
+    const prod = env('prod', { id: 'env-42' });
     const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', html``).__html;
+    expect(out).toMatch(/<a href="\/env\/env-42"[^>]*>prod<\/a>/);
+  });
+
+  test('for production rollback-go asks for confirmation before submitting', () => {
+    const current = release({ id: 'r-current', state: 'active', sha: sha('7654321') });
+    const target = release({ id: 'r-target' });
+    const prod = env('prod', { releases: [current, target] });
+    const out = panelView(i, prod, current, 'csrf-token', html``).__html;
+    const yes = tagOf(out, 'confirm-yes');
+    const no = tagOf(out, 'confirm-no');
     expect(tagOf(out, 'confirm-ask')).toMatch(/\bhidden\b/);
-    expect(tagOf(out, 'confirm-yes')).toContain('type="submit"');
+    expect(yes).toContain('type="submit"');
     expect(tagOf(out, 'rollback-go')).toContain('type="button"');
-    expect(out).toContain(i.t('confirm.ask'));
+    expect.soft(out).toContain('<b>Roll back production prod to a1b2c3d?</b>');
+    expect.soft(out).toContain(`${yes}Yes, roll back</button>`);
+    expect.soft(out).toContain(`${no}Cancel</button>`);
+  });
+
+  test('the production rollback confirm step posts confirm=yes', () => {
+    const current = release({ id: 'r-current', state: 'active', sha: sha('7654321') });
+    const prod = env('prod', { releases: [current, release({ id: 'r-target' })] });
+    const out = panelView(i, prod, current, 'csrf-token', html``).__html;
+    const ask = /<div\b[^>]*data-testid="confirm-ask"[^>]*>[\s\S]*?<\/div>/.exec(out)?.[0] ?? '';
+    expect(ask).toContain('<input type="hidden" name="confirm" value="yes">');
   });
 
   test('for production the confirm step moves focus to Yes and back to the main button', () => {
@@ -794,6 +964,12 @@ describe('panelView', () => {
     expect(isDisabled(go!)).toBe(false);
   });
 
+  test('the rollback unavailability message names the server with the offline agent', () => {
+    const stage = env('stage', { agentOnline: false });
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
+    expect(out).toContain('Rollback is unavailable: the agent on server build-host is offline.');
+  });
+
   test('a marker warning disables rollback and shows the rb.noMarker text', () => {
     const noMarker = i.t('rb.noMarker');
     expect(noMarker).not.toBe('rb.noMarker');
@@ -830,6 +1006,14 @@ describe('panelView', () => {
     expect(tagOf(out, 'approve-destructive')).toBeDefined();
     expect(out).toContain(i.t('codes.SCHEMA_DESTRUCTIVE', { col: 'users.email' }));
     expect(out).not.toContain('data-testid="rollback-go"');
+  });
+
+  test('for production approve-destructive confirms the commit and column', () => {
+    const failed = release({ state: 'failed', failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users.email' } } });
+    const prod = env('prod', { releases: [failed] });
+    const out = panelView(i, prod, failed, 'csrf-token', html``).__html;
+    expect.soft(out).toContain('<b>Allow a1b2c3d to remove users.email in production?</b>');
+    expect.soft(out).toContain(`${tagOf(out, 'confirm-yes')}Yes, approve</button>`);
   });
 
   test('an available release does not offer approve-destructive', () => {
@@ -904,14 +1088,18 @@ describe('production tag', () => {
     expect(tag).not.toBe('env.prodTag');
     const prod = env('prod');
     const stage = env('stage');
+    const homeIndex = (e: EnvVM) => {
+      const out = homeView(li, homeVmFrom([e]), NOW).__html;
+      return out.slice(out.indexOf('data-testid="env-index"'));
+    };
     const prodViews = [
-      boardView(li, [prod], NOW).__html,
+      homeIndex(prod),
       envView(li, prod, NOW, parts).__html,
       panelView(li, prod, prod.releases[0]!, 'csrf-token', html``).__html,
     ];
     for (const out of prodViews) expect(out).toContain(`>${tag}<`);
     const stageViews = [
-      boardView(li, [stage], NOW).__html,
+      homeIndex(stage),
       envView(li, stage, NOW, parts).__html,
       panelView(li, stage, stage.releases[0]!, 'csrf-token', html``).__html,
     ];
@@ -1000,6 +1188,6 @@ describe('every view in every language', () => {
       expectNoRawKeys(lang, `cleanupView ${r.id}`, cleanupView(li, r, 'csrf-token').__html);
     }
     expectNoRawKeys(lang, 'panelView offline', panelView(li, offline, offline.releases[0]!, 'csrf-token', html``).__html);
-    expectNoRawKeys(lang, 'boardView', boardView(li, [prod, offline], NOW).__html);
+    expectNoRawKeys(lang, 'homeView', homeView(li, homeVmFrom([prod, offline]), NOW).__html);
   });
 });

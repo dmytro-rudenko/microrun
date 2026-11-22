@@ -193,7 +193,7 @@ test('destructive migration is rejected before touching the database', async () 
 
 test('UI renders in all 8 languages without raw keys', async () => {
   await page.goto('/');
-  const envHref = await page.locator('[data-testid=col-production] a[href^="/env/"]').first().getAttribute('href');
+  const envHref = await page.locator('[data-testid=env-link-production]').getAttribute('href');
   expect(envHref).toMatch(/^\/env\//);
   for (const lang of LANGS) {
     await page.goto('/');

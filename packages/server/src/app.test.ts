@@ -299,7 +299,7 @@ describe('UI', () => {
     expect(res.cookies.find((c) => c.name === 'mr_lang')).toBeUndefined();
   });
 
-  it('renders the board with col-production and rel-production-<sha7>, behind login', async () => {
+  it('renders home with env-link-production and rel-production-<sha7>, behind login', async () => {
     await deploy(A);
     const anon = await app.inject({ method: 'GET', url: '/', headers: { accept: 'text/html' } });
     expect(anon.statusCode).toBe(302);
@@ -309,8 +309,8 @@ describe('UI', () => {
     const res = await app.inject({ method: 'GET', url: '/', headers: { cookie, accept: 'text/html' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/html/);
-    expect(res.body).toContain('data-testid="col-production"');
-    expect(res.body).toContain('data-testid="col-staging"');
+    expect(res.body).toContain('data-testid="env-link-production"');
+    expect(res.body).toContain('data-testid="env-link-staging"');
     expect(res.body).toContain(`data-testid="rel-production-${A.slice(0, 7)}"`);
   });
 
@@ -1031,13 +1031,14 @@ describe('UI routes', () => {
       expect((await get('/env/new')).statusCode).toBe(200);
     });
 
-    it('warns on the board card and the panel when an active release image is not stored', async () => {
+    it('flags the environment on the home index and warns in the panel when an active release image is not stored', async () => {
       await deploy(A);
       const relA = await release(A);
       const warn = en.t('storage.failedWarn');
-      expect((await get('/')).body).not.toContain(warn);
+      const prodLink = (body: string) => /<a[^>]*data-testid="env-link-production"[\s\S]*?<\/a>/.exec(body)?.[0] ?? '';
+      expect(prodLink((await get('/')).body)).toContain(en.t('home.dot.ok'));
       await db('releases').where({ id: relA.id }).update({ stored: 0 });
-      expect((await get('/')).body).toContain(warn);
+      expect(prodLink((await get('/')).body)).toContain(en.t('home.dot.warn'));
       expect((await get(`/panel/${relA.id}`)).body).toContain(warn);
     });
 
@@ -1051,10 +1052,11 @@ describe('UI routes', () => {
       expect((await get(`/panel/${relA.id}`)).body).not.toContain(warn);
     });
 
-    it('reads at most 200 operations per env to render the board and a panel', async () => {
+    it('renders home without listing operations and reads at most 200 operations for a panel', async () => {
       await deploy(A);
       const spy = vi.spyOn(repo, 'listOperations');
-      await get('/');
+      expect((await get('/')).statusCode).toBe(200);
+      expect(spy).not.toHaveBeenCalled();
       await get(`/panel/${(await release(A)).id}`);
       expect(spy).toHaveBeenCalled();
       for (const [f] of spy.mock.calls) expect(f.limit).toBeLessThanOrEqual(200);
@@ -1102,7 +1104,7 @@ describe('UI routes', () => {
       expect(body).toContain('href="/env/new"');
       expect(body).not.toContain('href="/history"');
       expect(body).not.toContain('href="/settings/servers"');
-      expect(body).toContain(`href="/env/${prodId}#settings" data-testid="env-settings-production"`);
+      expect(body).toMatch(new RegExp(`<a[^>]*href="/env/${prodId}"[^>]*data-testid="env-link-production"`));
     });
 
     it('shows releases and settings on one env page with a production strip', async () => {
@@ -1223,7 +1225,7 @@ describe('UI routes', () => {
       expect(res.headers.location).toBe('/');
       expect(await repo.getEnv(prodId)).toBeNull();
       for (const t of ['releases', 'operations', 'destructive_approvals']) expect(await db(t).where({ env_id: prodId }), t).toEqual([]);
-      expect((await get('/')).body).not.toContain('data-testid="col-production"');
+      expect((await get('/')).body).not.toContain('data-testid="env-link-production"');
     });
 
     it('refuses to delete an environment with an operation in progress', async () => {
