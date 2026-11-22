@@ -1,0 +1,19 @@
+{
+  "name": "@microrun/core",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./state": "./src/state.ts",
+    "./schema": "./src/schema.ts",
+    "./protocol": "./src/protocol.ts",
+    "./i18n": "./src/i18n/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "zod": "^4.6.7"
+  }
+}
