@@ -198,7 +198,7 @@ function deleteDialog(
     testid: p.base + p.suffix,
     label: tr(i, 'settings.delete'),
     attrs: raw(' onclick="this.nextElementSibling.showModal()"'),
-  })}<dialog data-testid="${p.base}-dialog${p.suffix}" class="w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
+  })}<dialog data-testid="${p.base}-dialog${p.suffix}" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
 <form method="post" action="${p.action}" class="flex flex-col gap-4">${p.csrf}
 <h2 class="font-display text-lg font-semibold">${p.title}</h2>
 <p class="text-sm text-mute">${p.body}</p>
@@ -314,6 +314,7 @@ export function envFormView(
     bind?: BindResult;
     rollingHint?: boolean;
     deleteError?: string;
+    storedName?: string;
   },
 ): Html {
   const v = (k: keyof EnvFormValues) => p.values[k] ?? '';
@@ -393,9 +394,9 @@ ${
         base: 'env-delete',
         suffix: '',
         action: `/settings/env/${id}/delete`,
-        title: tr(i, 'settings.env.deleteTitle', { name: v('name') }),
+        title: tr(i, 'settings.env.deleteTitle', { name: p.storedName ?? v('name') }),
         body: tr(i, 'settings.env.deleteBody'),
-        expected: v('name'),
+        expected: p.storedName ?? v('name'),
         csrf,
       })}</section>`
     : ''
