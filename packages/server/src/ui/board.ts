@@ -21,6 +21,7 @@ export interface ReleaseVM {
   activationSeq: number | null;
   imagePurged: boolean;
   stored: boolean;
+  storing: boolean;
   cleanupFailed: { code: string; params: Record<string, string | number> } | null;
 }
 
@@ -70,7 +71,7 @@ export const blockedNote = (i: I18n, r: ReleaseVM) =>
 export const failNote = (i: I18n, r: ReleaseVM) =>
   r.failNote && html`<div class="small failed">${codeText(i, r.failNote.code, r.failNote.params)}</div>`;
 
-export const unstored = (r: ReleaseVM) => !r.stored && (r.state === 'active' || r.state === 'available');
+export const unstored = (r: ReleaseVM) => !r.stored && !r.storing && (r.state === 'active' || r.state === 'available');
 
 export const storageWarn = (i: I18n) => html`<div class="alert w">${tr(i, 'storage.failedWarn')}</div>`;
 

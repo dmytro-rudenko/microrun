@@ -102,6 +102,7 @@ function releaseVM(env: EnvRow, r: ReleaseRow, rs: ReleaseRow[], ops: OperationR
     activationSeq: r.activationSeq,
     imagePurged: r.imagePurgedAt !== null,
     stored: r.stored,
+    storing: ops.some((o) => o.toReleaseId === r.id && o.kind !== 'cleanup' && !finished(o)),
     cleanupFailed: cleanupFailedOf(ops, r),
   };
 }
