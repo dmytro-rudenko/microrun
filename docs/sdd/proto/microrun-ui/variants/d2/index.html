@@ -1,0 +1,181 @@
+<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>D2 · B + A + i18n</title>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--card:#fff;--ink:#1b1f24;--mute:#6a737d;--line:#e1e4e8;--accent:#2f6feb;--on-accent:#fff;--prod:#c62828;--prod-soft:#fdecea;--ok:#1a7f37;--warn:#9a6700;--warn-soft:#fff8c5;--code:#f3f4f6}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1419;--panel:#161c23;--card:#1c242d;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--on-accent:#04121f;--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--ok:#3fb950;--warn:#d29922;--warn-soft:rgba(210,153,34,.12);--code:#0f1419}}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
+header{display:flex;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
+header b{font-size:16px;margin-right:12px}header a{color:var(--mute);text-decoration:none;padding:6px 12px;border-radius:6px}header a.on{background:var(--bg);color:var(--ink);font-weight:600}
+header select{margin-left:auto;font:inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
+main{padding:20px}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:16px}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:0}
+.col.prod{border:2px solid var(--prod);box-shadow:0 0 0 4px var(--prod-soft)}
+.ch{display:flex;justify-content:space-between;align-items:center;gap:8px}.ch h2{margin:0;font-size:18px}.ch h2 a{color:inherit;text-decoration:none}.ch h2 a:hover{text-decoration:underline}
+.meta{color:var(--mute);font-size:12px;margin:4px 0 12px}
+.tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.04em;background:var(--prod);color:#fff}
+.agent{color:var(--ok)}.agent.off{color:var(--mute)}
+.tl{position:relative;padding-left:18px}.tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.rel{position:relative;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px;cursor:pointer}
+.rel:hover,.rel.sel{border-color:var(--accent)}.rel.sel{outline:1px solid var(--accent)}
+.rel::before{content:'';position:absolute;left:-18px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--panel)}
+.rel.active{border-color:var(--ok)}.rel.active::before{background:var(--ok)}.rel.available::before{background:var(--accent)}.rel.blocked::before{background:var(--prod)}.rel.failed::before{background:var(--warn)}.rel.expired{opacity:.5}
+.sha{font-family:ui-monospace,monospace;font-weight:700}
+.st{float:right;font-size:11px;color:var(--mute)}.rel.active .st{color:var(--ok)}.rel.blocked .st{color:var(--prod)}.rel.failed .st{color:var(--warn)}
+.small{font-size:12px;color:var(--mute)}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:6px}.bar i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.bar.w120{width:120px}
+.alert{border:1px solid var(--prod);background:var(--prod-soft);border-radius:8px;padding:8px 10px;font-size:13px;margin-bottom:10px}
+.alert.w{border-color:var(--warn);background:var(--warn-soft)}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid;white-space:nowrap}
+.b-active{color:var(--ok)}.b-available{color:var(--accent)}.b-blocked{color:var(--prod);background:var(--prod-soft)}.b-expired{color:var(--mute)}.b-failed{color:var(--warn);background:var(--warn-soft)}
+table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--mute);font-weight:600}
+tr.click{cursor:pointer}tr.click:hover td{background:var(--bg)}tr.sel td{background:var(--prod-soft)}tr.dim td{color:var(--mute)}
+.diff{font-family:ui-monospace,monospace;font-size:12px}.diff .add{color:var(--ok)}.diff .drop{color:var(--prod)}.diff .warn{color:var(--warn)}
+.diff.box{background:var(--code);border-radius:6px;padding:8px}
+h1{font-size:22px;margin:8px 0 4px}.sub{color:var(--mute);font-size:13px;margin-bottom:16px}.sub span{margin-right:14px}
+a.back{color:var(--accent);text-decoration:none}
+.filters{display:flex;gap:6px;margin-bottom:12px;flex-wrap:wrap}
+button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer}
+button.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+aside{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .2s;overflow-y:auto;z-index:5;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
+aside.open{transform:none}
+@media (min-width:1100px){body.side-open main{margin-right:440px}}
+main{transition:margin .2s}aside .in{padding:20px}aside.prod{border-left:4px solid var(--prod)}
+.x{float:right;background:none;border:none;color:var(--mute);font-size:22px;padding:0 4px}
+button.big{width:100%;padding:10px;border-radius:8px;border:none;font-weight:600;margin-top:12px;background:var(--accent);color:var(--on-accent)}
+button.big.prod{background:var(--prod);color:#fff}button.big:disabled{opacity:.4;cursor:not-allowed}
+button.big.ghost{background:none;border:1px solid var(--line);color:var(--ink)}
+input[type=text]{font:inherit;width:100%;padding:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;margin-top:6px}
+.steps{list-style:none;padding:0}.steps li{color:var(--mute);padding:3px 0}.steps li.done{color:var(--ink)}.steps li.done::before{content:'✓ ';color:var(--ok)}
+.rule{display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:6px;margin:6px 0}.rule .n{margin-left:auto;font-weight:700;white-space:nowrap}
+.sect{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
+.sub,td{overflow-wrap:anywhere}
+@media (max-width:900px){.cols{grid-template-columns:1fr}.col.prod{order:-1}.hide-sm{display:none}main{padding:16px}.sub span{display:block}.bar.w120{width:100%}th,td{padding:8px}td.sha{white-space:normal}}
+</style></head><body>
+<header><b>microrun</b><a href="#/" id="n-envs"></a><a href="#/history" id="n-hist"></a><a href="#/" id="n-set"></a><select id="lang" aria-label="Language"></select></header>
+<main id="app"></main>
+<aside id="side"><div class="in" id="sidein"></div></aside>
+<script src="../../shared/i18n.js"></script><script src="../../shared/data-v2.js"></script>
+<script>
+const $ = s => document.querySelector(s), app = $('#app'), side = $('#side'), sin = $('#sidein');
+const { t, esc } = I18N, M = MR2;
+let selKey = null, histFilter = 'all';
+const order = ['dev', 'stage', 'production'];
+const st = s => t('state.' + s);
+const diffHtml = (r, box) => r.diff.length ? `<div class="diff ${box ? 'box' : ''}">${r.diff.map(x => `<div class="${x.k}">${x.k === 'add' ? '+' : x.k === 'drop' ? '−' : '!'} ${esc(x.t)}</div>`).join('')}</div>` : `<span class="small">${t('schema.none')}</span>`;
+const windowW = e => I18N.unit(e.retentionDays, 'day');
+const leftOf = (e, r) => r.state === 'available' ? { ms: r.superseded + e.retention - M.now, pct: Math.max(0, Math.min(100, (r.superseded + e.retention - M.now) / e.retention * 100)) } : null;
+const agentTxt = e => `<span class="agent ${e.agentOnline ? '' : 'off'}">● ${t(e.agentOnline ? 'agent.online' : 'agent.offline')}</span>`;
+const markerTxt = e => `<b>${t('marker.title')}</b> ${t('marker.text', e.markerWarn)}`;
+const notes = r => (r.blocked ? `<div class="small" style="color:var(--prod)">${t('note.blocked', { at: I18N.date(r.blocked.at), to: r.blocked.to })}</div>` : '') + (r.fail ? `<div class="small" style="color:var(--warn)">${t('note.fail', r.fail)}</div>` : '');
+
+function board() {
+  app.innerHTML = `<div class="cols">${order.map(M.env).map(e => `<section class="col ${e.prod ? 'prod' : ''}">
+    <div class="ch"><h2><a href="#/env/${e.id}">${e.name}</a></h2>${e.prod ? '<span class="tag">PRODUCTION</span>' : ''}</div>
+    <div class="meta">${t('env.branch', { b: e.branch })} · ${t('env.window', { w: windowW(e) })} · ${agentTxt(e)}</div>
+    ${e.markerOk ? '' : `<div class="alert">⚠ ${t('marker.short')}</div>`}
+    ${e.agentOnline ? '' : `<div class="alert w">${t('agent.offlineLong')}</div>`}
+    <div class="tl">${e.releases.map(r => { const l = leftOf(e, r); return `<div class="rel ${r.state} ${selKey === e.id + r.sha ? 'sel' : ''}" data-e="${e.id}" data-s="${r.sha}">
+      <span class="st">${st(r.state)}</span><span class="sha">${r.sha}</span><div>${esc(r.msg)}</div>
+      <div class="small">${esc(r.author)} · ${I18N.ago(r.at, M.now)}${l ? ' · ' + t('window.left', { t: I18N.left(l.ms) }) : ''}</div>
+      ${l ? `<div class="bar"><i style="width:${l.pct}%"></i></div>` : ''}</div>`; }).join('')}</div>
+    <div class="small" style="margin-top:4px"><a class="back" href="#/env/${e.id}">${t('env.open')}</a></div></section>`).join('')}</div>`;
+  app.querySelectorAll('.rel').forEach(el => el.onclick = () => open(el.dataset.e, el.dataset.s));
+}
+
+function envPage(id) {
+  const e = M.env(id);
+  app.innerHTML = `<a class="back" href="#/">${t('env.back')}</a><h1>${e.name} ${e.prod ? '<span class="tag">PRODUCTION</span>' : ''}</h1>
+    <div class="sub"><span>${t('env.branch', { b: e.branch })}</span><span>${t('meta.server')}: ${e.server} (${t(e.builtin ? 'agent.builtin' : 'agent.remote')}) ${agentTxt(e)}</span>
+    <span>${t('meta.compose')}: ${e.compose} — ${e.services.map(s => s.name + ' · ' + s.strategy).join(', ')}</span><span>${t('meta.db')}: ${e.db}</span>
+    <span>${t('meta.storage')}: ${t('storage.' + e.storage.k)} · ${e.storage.v}</span><span>${t('env.window', { w: windowW(e) })}</span></div>
+    ${e.agentOnline ? '' : `<div class="alert w">${t('agent.offlineLong')}</div>`}${e.markerOk ? '' : `<div class="alert">${markerTxt(e)}</div>`}
+    <table><thead><tr><th>${t('col.release')}</th><th>${t('col.state')}</th><th class="hide-sm">${t('col.schema')}</th><th>${t('col.window')}</th></tr></thead><tbody>
+    ${e.releases.map(r => { const l = leftOf(e, r); return `<tr class="click ${r.state === 'expired' ? 'dim' : ''} ${selKey === e.id + r.sha ? 'sel' : ''}" data-e="${e.id}" data-s="${r.sha}">
+      <td><span class="sha">${r.sha}</span> ${esc(r.msg)}<div class="small">${esc(r.author)} · ${I18N.date(r.at)}</div>${notes(r)}</td>
+      <td><span class="badge b-${r.state}">${st(r.state)}</span></td><td class="hide-sm">${diffHtml(r)}</td>
+      <td>${l ? `${I18N.left(l.ms)}<div class="bar w120"><i style="width:${l.pct}%"></i></div>` : '—'}</td></tr>`; }).join('')}
+    </tbody></table>`;
+  app.querySelectorAll('tr.click').forEach(el => el.onclick = () => open(el.dataset.e, el.dataset.s));
+}
+
+function history() {
+  const rows = M.history.filter(h => histFilter === 'all' || h.env === histFilter);
+  const actor = a => typeof a === 'object' ? t('actor.ci', { name: a.ci }) : t('actor.' + a);
+  app.innerHTML = `<h1>${t('nav.history')}</h1><div class="sub">${t('hist.sub')}</div>
+    <div class="filters">${['all', ...order].map(x => `<button class="${x === histFilter ? 'on' : ''}" data-f="${x}">${x === 'all' ? t('hist.all') : x}</button>`).join('')}</div>
+    <table><thead><tr><th>${t('col.when')}</th><th>${t('col.env')}</th><th>${t('col.action')}</th><th>${t('col.fromTo')}</th><th class="hide-sm">${t('col.who')}</th><th>${t('col.result')}</th></tr></thead><tbody>
+    ${rows.map(h => `<tr><td>${I18N.date(h.at)}</td><td>${h.env === 'production' ? '<span class="tag">production</span>' : h.env}</td><td>${t('kind.' + h.kind)}</td>
+      <td class="sha">${h.from} → ${h.to}</td><td class="hide-sm">${esc(actor(h.actor))}</td>
+      <td><span style="color:${h.status === 'ok' ? 'var(--ok)' : 'var(--prod)'}">${t('status.' + h.status)}</span>${h.dur ? ' · ' + I18N.unit(h.dur, 'second') : ''}
+      ${h.reason ? `<div class="small">${t(h.reason.k, { ...h.reason.p, at: h.reason.p.at ? I18N.date(h.reason.p.at) : '', p: h.reason.p.p != null ? I18N.num(h.reason.p.p) : '', a: h.reason.p.a != null ? I18N.num(h.reason.p.a) : '' })}</div>` : ''}</td></tr>`).join('')}
+    </tbody></table>`;
+  app.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { histFilter = b.dataset.f; history(); });
+}
+
+function open(id, sha) {
+  const e = M.env(id), r = e.releases.find(x => x.sha === sha), cur = e.releases.find(x => x.state === 'active');
+  selKey = id + sha; route(true); side.className = 'open ' + (e.prod ? 'prod' : ''); document.body.classList.add('side-open');
+  const can = r.state === 'available' && e.agentOnline && e.markerOk, blocked = M.newerThan(e, sha);
+  const why = !e.agentOnline ? t('rb.noAgent') : !e.markerOk ? t('rb.noMarker') : '';
+  sin.innerHTML = `<button class="x" onclick="closeSide()" aria-label="${t('close')}">×</button>
+    <div class="small">${e.name}${e.prod ? ' · <b style="color:var(--prod)">PRODUCTION</b>' : ''}</div>
+    <h2 style="margin:4px 0"><span class="sha">${r.sha}</span> <span class="badge b-${r.state}">${st(r.state)}</span></h2><div>${esc(r.msg)}</div>
+    <div class="small" style="margin:6px 0 14px">${esc(r.author)} · ${I18N.date(r.at)}</div>${notes(r)}
+    <div class="small" style="margin:10px 0 4px">${t('col.schema')}</div>${diffHtml(r, true)}
+    ${r.state === 'available' ? `<div class="sect"><b>${t('rb.title', { from: cur.sha, to: r.sha })}</b>
+      <div class="small" style="margin:6px 0">${t('rb.willBlock')} ${blocked.map(b => `<span class="sha">${b.sha}</span>`).join(', ')}</div>
+      <div class="small">${t('rb.schema')}</div>
+      ${e.prod ? `<label class="small" style="display:block;margin-top:10px">${t('rb.confirm', { name: e.name })}<input type="text" id="cf" autocomplete="off" ${can ? '' : 'disabled'}></label>` : ''}
+      <button class="big ${e.prod ? 'prod' : ''}" id="go" ${!can || e.prod ? 'disabled' : ''}>${t('rb.go')}</button>
+      ${why ? `<div class="small" style="margin-top:6px;color:var(--prod)">${why}</div>` : ''}</div>` : ''}`;
+  if (e.prod && can) $('#cf').oninput = ev => $('#go').disabled = ev.target.value !== e.name;
+  if ($('#go')) $('#go').onclick = () => run(e, r.sha, blocked);
+}
+
+function stepsFor(e, sha) {
+  const s = [t('step.image', { sha })];
+  for (const v of e.services) v.strategy === 'rolling' ? s.push(t('step.healthy', { svc: v.name }), t('step.stopped', { svc: v.name })) : s.push(t('step.recreated', { svc: v.name }));
+  s.push(t('step.blocked')); return s;
+}
+function run(e, sha, blocked) {
+  const steps = stepsFor(e, sha), t0 = Date.now();
+  sin.innerHTML = `<h2 id="rbh">${t('rb.running')}</h2><div class="small">${e.name}: <span class="sha">${sha}</span></div><ul class="steps">${steps.map(s => `<li>${s}</li>`).join('')}</ul><div id="after"></div>`;
+  let i = 0; const tick = () => {
+    if (i < steps.length) { sin.querySelectorAll('.steps li')[i++].className = 'done'; return setTimeout(tick, 450 + Math.random() * 400); }
+    M.applyRollback(e, sha); selKey = e.id + sha; route(true);
+    const c = blocked.filter(r => r.cleanup), secs = Math.round((Date.now() - t0) / 250);
+    $('#rbh').textContent = t('rb.done', { s: I18N.unit(secs, 'second') }); $('#rbh').style.color = 'var(--ok)';
+    $('#after').innerHTML = `${c.length ? cleanupHtml(c[0].sha) : `<button class="big ghost" onclick="closeSide()">${t('close')}</button>`}`;
+    if (c.length) wireCleanup();
+  }; tick();
+}
+function cleanupHtml(sha) {
+  return `<div class="sect"><b>${t('cl.title', { sha })}</b><div class="small">${t('cl.sub')}</div>
+    ${M.cleanupRules.map(r => `<label class="rule"><input type="checkbox" ${r.count ? 'checked' : 'disabled'} data-n="${r.count}"><div><b>${r.rule}</b><div class="small">${esc(r.description)}</div></div><span class="n">${I18N.num(r.count)}</span></label>`).join('')}
+    <button class="big prod" id="ap"></button><button class="big ghost" onclick="closeSide()">${t('cl.skip')}</button></div>`;
+}
+function wireCleanup() {
+  const boxes = [...sin.querySelectorAll('.rule input')];
+  const upd = () => { const n = boxes.filter(b => b.checked).reduce((a, b) => a + +b.dataset.n, 0); $('#ap').textContent = t('cl.delete', { n }); $('#ap').disabled = !n; };
+  boxes.forEach(b => b.onchange = upd); upd();
+  $('#ap').onclick = () => { const picked = M.cleanupRules.filter((r, i) => boxes[i].checked);
+    $('#after').innerHTML = `<p style="color:var(--ok);font-weight:600">${t('cl.done')}</p>${picked.map(r => `<div class="small">${t('cl.result', { rule: r.rule, p: I18N.num(r.count), a: I18N.num(r.count) })}</div>`).join('')}<button class="big ghost" onclick="closeSide()">${t('close')}</button>`; };
+}
+function closeSide() { side.className = ''; document.body.classList.remove('side-open'); selKey = null; route(true); }
+
+function chrome() {
+  $('#n-envs').textContent = t('nav.envs'); $('#n-hist').textContent = t('nav.history'); $('#n-set').textContent = t('nav.settings');
+  const h = location.hash; $('#n-envs').className = h.startsWith('#/history') ? '' : 'on'; $('#n-hist').className = h.startsWith('#/history') ? 'on' : '';
+  $('#lang').innerHTML = I18N.LANGS.map(l => `<option value="${l}" ${l === I18N.lang ? 'selected' : ''}>${I18N.D[l].lang}</option>`).join('');
+}
+function route(keepSide) {
+  if (!keepSide) { side.className = ''; document.body.classList.remove('side-open'); selKey = null; }
+  chrome(); const p = (location.hash.slice(1) || '/').split('/');
+  p[1] === 'env' ? envPage(p[2]) : p[1] === 'history' ? history() : board();
+}
+$('#lang').onchange = ev => { I18N.set(ev.target.value); route(); };
+addEventListener('hashchange', () => route()); route();
+</script></body></html>

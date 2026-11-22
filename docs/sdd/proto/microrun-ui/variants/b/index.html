@@ -1,0 +1,113 @@
+<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>B · Колонки оточень + бічна панель</title>
+<style>
+:root{--bg:#0f1419;--panel:#161c23;--card:#1c242d;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--prod:#ff6b6b;--ok:#3fb950;--warn:#d29922}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
+header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--line)}
+header b{font-size:16px}.tabs{display:flex;gap:4px;margin-left:16px}.tabs button{background:none;border:none;color:var(--mute);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+.tabs button.on{background:var(--card);color:var(--ink)}
+.cols{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:16px;padding:20px;overflow-x:auto}
+.col{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px;min-width:260px}
+.col.prod{border:2px solid var(--prod);box-shadow:0 0 0 4px rgba(255,107,107,.08)}
+.ch{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}.ch h2{margin:0;font-size:18px}
+.meta{color:var(--mute);font-size:12px;margin-bottom:12px}
+.tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;letter-spacing:.04em}.tag.prod{background:var(--prod);color:#1b0000}
+.agent{font-size:12px;color:var(--ok)}.agent.off{color:var(--mute)}
+.tl{position:relative;padding-left:18px}.tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.rel{position:relative;background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px;margin-bottom:10px;cursor:pointer}
+.rel:hover{border-color:var(--accent)}.rel.sel{border-color:var(--accent);outline:1px solid var(--accent)}
+.rel::before{content:'';position:absolute;left:-18px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--bg)}
+.rel.active::before{background:var(--ok)}.rel.available::before{background:var(--accent)}.rel.blocked::before{background:var(--prod)}.rel.failed::before{background:var(--warn)}
+.rel.expired{opacity:.45}
+.rel.active{border-color:var(--ok)}
+.sha{font-family:ui-monospace,monospace;font-weight:700}.st{float:right;font-size:11px;color:var(--mute)}
+.rel.active .st{color:var(--ok)}.rel.blocked .st{color:var(--prod)}.rel.failed .st{color:var(--warn)}
+.msg{margin:2px 0}.small{font-size:12px;color:var(--mute)}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:6px}.bar i{display:block;height:100%;background:var(--accent);border-radius:2px}
+.warnbox{border:1px solid var(--prod);background:rgba(255,107,107,.1);border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px}
+.infobox{border:1px solid var(--warn);background:rgba(210,153,34,.1);border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px}
+aside{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--panel);border-left:1px solid var(--line);transform:translateX(100%);transition:transform .2s;overflow-y:auto;z-index:5}
+aside.open{transform:none}aside .in{padding:20px}aside.prod{border-left:4px solid var(--prod)}
+.x{float:right;background:none;border:none;color:var(--mute);font-size:20px;cursor:pointer}
+.diff{font-family:ui-monospace,monospace;font-size:12px;background:var(--bg);border-radius:6px;padding:8px}.diff .add{color:var(--ok)}.diff .drop{color:var(--prod)}.diff .warn{color:var(--warn)}
+button.big{width:100%;padding:10px;border-radius:8px;border:none;font:inherit;font-weight:600;cursor:pointer;margin-top:12px}
+.go{background:var(--accent);color:#04121f}.go.prod{background:var(--prod);color:#1b0000}button.big:disabled{opacity:.4;cursor:not-allowed}
+.ghost{background:none;border:1px solid var(--line)!important;color:var(--ink)}
+input[type=text]{font:inherit;width:100%;padding:8px;background:var(--bg);color:var(--ink);border:1px solid var(--line);border-radius:6px;margin-top:6px}
+.steps{list-style:none;padding:0}.steps li{color:var(--mute);padding:3px 0}.steps li.done{color:var(--ink)}.steps li.done::before{content:'✓ ';color:var(--ok)}
+.rule{display:flex;gap:8px;align-items:flex-start;padding:8px;border:1px solid var(--line);border-radius:6px;margin:6px 0}.rule .n{margin-left:auto;font-weight:700}
+table{width:calc(100% - 40px);margin:20px;border-collapse:collapse}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line)}th{color:var(--mute);font-size:12px}
+@media (max-width:900px){.cols{grid-template-columns:1fr}}
+</style></head><body>
+<header><b>microrun</b><div class="tabs"><button class="on" data-t="board">Оточення</button><button data-t="hist">Історія</button><button>Налаштування</button></div></header>
+<div id="view"></div>
+<aside id="side"><div class="in" id="sidein"></div></aside>
+<script src="../../shared/data.js"></script><script src="../../shared/flow.js"></script>
+<script>
+const $ = s => document.querySelector(s), side = $('#side'), sin = $('#sidein');
+let tab = 'board';
+const order = ['dev', 'stage', 'production'];
+function board() {
+  $('#view').innerHTML = `<div class="cols">${order.map(MR.env).map(e => `<section class="col ${e.prod ? 'prod' : ''}">
+    <div class="ch"><h2>${e.name}</h2>${e.prod ? '<span class="tag prod">PRODUCTION</span>' : ''}</div>
+    <div class="meta">гілка ${e.branch} · вікно ${e.retentionLabel} · <span class="agent ${e.agentOnline ? '' : 'off'}">● ${e.agentOnline ? 'агент онлайн' : 'агент офлайн'}</span></div>
+    ${e.markerOk ? '' : `<div class="warnbox">⚠ ${e.markerWarn}</div>`}
+    ${e.agentOnline ? '' : '<div class="infobox">Агент офлайн з 14:31 — дії недоступні.</div>'}
+    <div class="tl">${e.releases.map(r => { const l = MR.left(e, r); return `<div class="rel ${r.state}" data-e="${e.id}" data-s="${r.sha}">
+      <span class="st">${MR.stateLabel[r.state]}</span><span class="sha">${r.sha}</span>
+      <div class="msg">${r.msg}</div><div class="small">${r.author} · ${MR.fmtAgo(r.at)}${l ? ` · ще ${l.label}` : ''}</div>
+      ${l ? `<div class="bar"><i style="width:${l.pct}%"></i></div>` : ''}</div>`; }).join('')}</div></section>`).join('')}</div>`;
+  document.querySelectorAll('.rel').forEach(el => el.onclick = () => open(el.dataset.e, el.dataset.s));
+}
+function sel(sha, id) { document.querySelectorAll('.rel').forEach(el => el.classList.toggle('sel', el.dataset.s === sha && el.dataset.e === id)); }
+function open(id, sha) {
+  const e = MR.env(id), r = e.releases.find(x => x.sha === sha), cur = e.releases.find(x => x.state === 'active');
+  sel(sha, id); side.className = 'open ' + (e.prod ? 'prod' : '');
+  const can = r.state === 'available' && e.agentOnline && e.markerOk, blocked = MR.newerThan(e, sha);
+  sin.innerHTML = `<button class="x" onclick="closeSide()">×</button>
+    <div class="small">${e.name}${e.prod ? ' · <b style="color:var(--prod)">PRODUCTION</b>' : ''}</div>
+    <h2 style="margin:4px 0"><span class="sha">${r.sha}</span></h2><div>${r.msg}</div>
+    <div class="small" style="margin:6px 0 14px">${r.author} · ${MR.fmtDate(r.at)} · ${MR.stateLabel[r.state]}</div>
+    ${r.blockedNote ? `<div class="warnbox">${r.blockedNote}. Повторний деплой цього коміту відхиляється.</div>` : ''}
+    ${r.failNote ? `<div class="infobox">${r.failNote}</div>` : ''}
+    <div class="small" style="margin-bottom:4px">Зміни схеми</div>
+    <div class="diff">${r.diff.length ? r.diff.map(x => `<div class="${x.k}">${x.k === 'add' ? '+' : x.k === 'drop' ? '−' : '!'} ${x.t}</div>`).join('') : 'без змін'}</div>
+    ${r.state === 'available' ? `<div style="margin-top:18px;border-top:1px solid var(--line);padding-top:14px">
+      <b>Відкотити ${cur.sha} → ${r.sha}</b>
+      <div class="small" style="margin:6px 0">Буде заблоковано: ${blocked.map(b => `<span class="sha">${b.sha}</span>`).join(', ')}. Схема БД не змінюється.</div>
+      ${e.prod ? `<label class="small">Введіть <b>production</b> для підтвердження<input type="text" id="cf" autocomplete="off" ${can ? '' : 'disabled'}></label>` : ''}
+      <button class="big go ${e.prod ? 'prod' : ''}" id="go" ${!can || e.prod ? 'disabled' : ''}>Відкотити</button>
+      ${can ? '' : '<div class="small" style="margin-top:6px">Недоступно: агент офлайн або база не відповідає оточенню.</div>'}</div>` : ''}`;
+  if (e.prod && can) $('#cf').oninput = ev => $('#go').disabled = ev.target.value !== 'production';
+  if ($('#go')) $('#go').onclick = () => run(e, r.sha, blocked);
+}
+function run(e, sha, blocked) {
+  const steps = MRFlow.rollbackSteps(e, sha);
+  sin.innerHTML = `<h2>Відкат ${e.name} → <span class="sha">${sha}</span></h2><ul class="steps">${steps.map(s => `<li>${s}</li>`).join('')}</ul><div id="after"></div>`;
+  MRFlow.run(steps, i => sin.querySelectorAll('.steps li')[i].className = 'done', secs => {
+    MR.applyRollback(e, sha); board();
+    const c = blocked.filter(r => r.cleanup);
+    $('#after').innerHTML = `<p style="color:var(--ok);font-weight:600">Готово за ${secs} с.</p>${c.length ? cleanupHtml(c[0].sha) : '<button class="big ghost" onclick="closeSide()">Закрити</button>'}`;
+    if (c.length) wireCleanup();
+  });
+}
+function cleanupHtml(sha) {
+  return `<div style="border-top:1px solid var(--line);padding-top:12px"><b>Прибирання даних релізу ${sha}</b>
+    <div class="small">Окремий крок: відкат уже завершено. Числа — з --dry-run.</div>
+    ${MR.cleanupRules.map(r => `<label class="rule"><input type="checkbox" ${r.count ? 'checked' : 'disabled'} data-n="${r.count}"><div><b>${r.rule}</b><div class="small">${r.description}</div></div><span class="n">${MRFlow.fmtN(r.count)}</span></label>`).join('')}
+    <button class="big go prod" id="ap"></button><button class="big ghost" onclick="closeSide()">Не прибирати</button></div>`;
+}
+function wireCleanup() {
+  const upd = () => { const n = [...sin.querySelectorAll('.rule input:checked')].reduce((a, i) => a + +i.dataset.n, 0); $('#ap').textContent = `Видалити ${MRFlow.fmtN(n)} записів`; $('#ap').disabled = !n; };
+  sin.querySelectorAll('.rule input').forEach(i => i.onchange = upd); upd();
+  $('#ap').onclick = () => { $('#after').innerHTML = '<p style="color:var(--ok)">Прибирання завершено: прогноз і фактична кількість збіглися.</p><button class="big ghost" onclick="closeSide()">Закрити</button>'; };
+}
+function closeSide() { side.className = ''; sel(null); }
+function hist() {
+  $('#view').innerHTML = `<table><thead><tr><th>Коли</th><th>Оточення</th><th>Дія</th><th>З → на</th><th>Хто</th><th>Результат</th></tr></thead><tbody>${MR.history.map(h => `<tr>
+    <td>${MR.fmtDate(h.at)}</td><td style="${h.env === 'production' ? 'color:var(--prod);font-weight:700' : ''}">${h.env}</td><td>${MR.kindLabel[h.kind]}</td><td class="sha">${h.from} → ${h.to}</td><td>${h.actor}</td>
+    <td style="color:${h.status === 'ok' ? 'var(--ok)' : 'var(--prod)'}">${MR.statusLabel[h.status]}${h.reason ? `<div class="small">${h.reason}</div>` : ''}</td></tr>`).join('')}</tbody></table>`;
+}
+document.querySelectorAll('.tabs button[data-t]').forEach(b => b.onclick = () => { tab = b.dataset.t; document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('on', x === b)); closeSide(); tab === 'board' ? board() : hist(); });
+board();
+</script></body></html>

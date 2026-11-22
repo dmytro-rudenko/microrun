@@ -1,0 +1,138 @@
+<!doctype html><html lang="uk"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>A · Таблиця + модальне вікно</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1b1f24;--mute:#6a737d;--line:#e1e4e8;--accent:#2f6feb;--prod:#c62828;--prod-bg:#fdecea;--ok:#1a7f37;--warn:#9a6700;--warn-bg:#fff8c5}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{display:flex;gap:24px;align-items:center;padding:0 24px;height:52px;background:#1b1f24;color:#fff}
+header b{font-size:16px}header a{color:#c9d1d9;text-decoration:none}header a.on{color:#fff;font-weight:600}
+main{max-width:1180px;margin:0 auto;padding:24px 16px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--mute);margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px}
+.env{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;cursor:pointer}
+.env:hover{border-color:var(--accent)}
+.env.prod{border:2px solid var(--prod);background:linear-gradient(var(--prod-bg),#fff 60px)}
+.badge{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:600;border:1px solid}
+.b-prod{color:#fff;background:var(--prod);border-color:var(--prod)}
+.b-active{color:var(--ok);border-color:var(--ok)}.b-available{color:var(--accent);border-color:var(--accent)}
+.b-blocked{color:var(--prod);border-color:var(--prod);background:var(--prod-bg)}.b-expired{color:var(--mute);border-color:var(--line)}
+.b-failed{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--ok);margin-right:6px}.dot.off{background:#d0d7de}
+.kv{color:var(--mute);font-size:13px;margin-top:8px}.kv div{margin:2px 0}
+.sha{font-family:ui-monospace,monospace;font-weight:600}
+.alert{border:1px solid #d4a72c;background:var(--warn-bg);border-radius:8px;padding:10px 14px;margin:12px 0}
+.alert.err{border-color:var(--prod);background:var(--prod-bg)}
+table{width:100%;border-collapse:collapse;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}th{font-size:12px;color:var(--mute);font-weight:600;background:#fafbfc}
+tr.dim td{color:var(--mute)}
+.diff{font-family:ui-monospace,monospace;font-size:12px}.diff .add{color:var(--ok)}.diff .drop{color:var(--prod)}.diff .warn{color:var(--warn)}
+.bar{height:4px;background:var(--line);border-radius:2px;margin-top:4px;width:120px}.bar i{display:block;height:100%;background:var(--accent);border-radius:2px}
+button{font:inherit;padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:#fff;cursor:pointer}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}button.danger{background:var(--prod);color:#fff;border-color:var(--prod)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+dialog{border:none;border-radius:12px;padding:0;width:min(560px,94vw);box-shadow:0 20px 60px rgba(0,0,0,.25)}
+dialog::backdrop{background:rgba(0,0,0,.4)}
+.dh{padding:16px 20px;border-bottom:1px solid var(--line);font-weight:600;font-size:16px}.dh.prod{background:var(--prod);color:#fff}
+.db{padding:16px 20px}.df{padding:12px 20px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+input[type=text]{font:inherit;width:100%;padding:8px;border:1px solid var(--line);border-radius:6px;margin-top:6px}
+.steps{list-style:none;padding:0;margin:0}.steps li{padding:4px 0;color:var(--mute)}.steps li.done{color:var(--ink)}.steps li.done::before{content:'✓ ';color:var(--ok)}
+.rule{display:flex;gap:10px;padding:10px;border:1px solid var(--line);border-radius:8px;margin:8px 0;align-items:flex-start}
+.rule .n{margin-left:auto;font-weight:700;white-space:nowrap}
+.filters{display:flex;gap:8px;margin-bottom:12px}
+@media (max-width:720px){.hide-sm{display:none}}
+</style></head><body>
+<header><b>microrun</b><a href="#/" id="nav-envs">Оточення</a><a href="#/history" id="nav-hist">Історія</a><a href="#/" style="margin-left:auto">Налаштування</a></header>
+<main id="app"></main>
+<dialog id="dlg"></dialog>
+<script src="../../shared/data.js"></script><script src="../../shared/flow.js"></script>
+<script>
+const $ = s => document.querySelector(s), app = $('#app'), dlg = $('#dlg');
+const badge = s => `<span class="badge b-${s}">${MR.stateLabel[s]}</span>`;
+const diff = r => r.diff.length ? `<div class="diff">${r.diff.map(x => `<div class="${x.k}">${x.k === 'add' ? '+' : x.k === 'drop' ? '−' : '!'} ${x.t}</div>`).join('')}</div>` : '<span style="color:var(--mute)">без змін</span>';
+
+function overview() {
+  app.innerHTML = `<h1>Оточення</h1><div class="sub">3 оточення · 2 сервери</div><div class="grid">${MR.envs.map(e => {
+    const a = e.releases.find(r => r.state === 'active'), n = e.releases.filter(r => r.state === 'available').length;
+    return `<div class="env ${e.prod ? 'prod' : ''}" onclick="location.hash='#/env/${e.id}'">
+      <div class="head"><div><b style="font-size:17px">${e.name}</b> ${e.prod ? '<span class="badge b-prod">PRODUCTION</span>' : ''}</div>
+      <span><span class="dot ${e.agentOnline ? '' : 'off'}"></span>${e.agentOnline ? 'агент онлайн' : 'агент офлайн'}</span></div>
+      <div class="kv"><div>Гілка <b>${e.branch}</b> · вікно ${e.retentionLabel}</div>
+      <div>Зараз: <span class="sha">${a.sha}</span> — ${a.msg}</div><div>${MR.fmtAgo(a.at)} · ${a.author} · ${n} доступно для відкату</div></div>
+      ${e.markerOk ? '' : '<div class="alert err" style="margin-bottom:0">⚠ Контейнер підключений до чужої бази</div>'}
+    </div>`; }).join('')}</div>`;
+}
+
+function envPage(id) {
+  const e = MR.env(id);
+  app.innerHTML = `<div class="head"><div><a href="#/">← Оточення</a><h1 style="margin-top:8px">${e.name} ${e.prod ? '<span class="badge b-prod">PRODUCTION</span>' : ''}</h1>
+    <div class="sub">Гілка ${e.branch} · ${e.server} · compose «${e.compose}» (${e.services.map(s => s.name + ': ' + s.strategy).join(', ')}) · ${e.db} · ${e.storage} · вікно ${e.retentionLabel}</div></div></div>
+    ${e.agentOnline ? '' : '<div class="alert">Агент офлайн з 14:31. Деплой і відкат недоступні, доки агент не підключиться.</div>'}
+    ${e.markerOk ? '' : `<div class="alert err"><b>Невідповідність бази.</b> ${e.markerWarn}</div>`}
+    <table><thead><tr><th>Реліз</th><th>Стан</th><th class="hide-sm">Зміни схеми</th><th>Вікно</th><th></th></tr></thead><tbody>
+    ${e.releases.map(r => { const l = MR.left(e, r); return `<tr class="${r.state === 'expired' ? 'dim' : ''}">
+      <td><span class="sha">${r.sha}</span> ${r.msg}<div class="kv">${r.author} · ${MR.fmtDate(r.at)}</div>
+        ${r.blockedNote ? `<div class="kv" style="color:var(--prod)">${r.blockedNote}</div>` : ''}${r.failNote ? `<div class="kv" style="color:var(--warn)">${r.failNote}</div>` : ''}</td>
+      <td>${badge(r.state)}</td><td class="hide-sm">${diff(r)}</td>
+      <td>${l ? `${l.label}<div class="bar"><i style="width:${l.pct}%"></i></div>` : '—'}</td>
+      <td>${r.state === 'available' ? `<button ${e.agentOnline && e.markerOk ? '' : 'disabled'} onclick="rollback('${e.id}','${r.sha}')">Відкотити сюди</button>` : ''}</td></tr>`; }).join('')}
+    </tbody></table>`;
+}
+
+function rollback(id, sha) {
+  const e = MR.env(id), cur = e.releases.find(r => r.state === 'active'), blocked = MR.newerThan(e, sha);
+  dlg.innerHTML = `<div class="dh ${e.prod ? 'prod' : ''}">Відкат ${e.name}: ${cur.sha} → ${sha}</div><div class="db">
+    <p>Буде заблоковано (повторний деплой цих комітів відхилятиметься):</p>
+    <ul>${blocked.map(r => `<li><span class="sha">${r.sha}</span> ${r.msg}</li>`).join('')}</ul>
+    <p style="color:var(--mute)">Схема БД не змінюється. Дані в існуючих полях зберігаються.</p>
+    ${e.prod ? `<label>Щоб підтвердити, введіть <b>${e.name}</b><input type="text" id="confirm" autocomplete="off"></label>` : ''}
+  </div><div class="df"><button onclick="dlg.close()">Скасувати</button><button class="danger" id="go" ${e.prod ? 'disabled' : ''}>Відкотити</button></div>`;
+  dlg.showModal();
+  if (e.prod) $('#confirm').oninput = ev => $('#go').disabled = ev.target.value !== e.name;
+  $('#go').onclick = () => progress(e, sha, blocked);
+}
+
+function progress(e, sha, blocked) {
+  const steps = MRFlow.rollbackSteps(e, sha);
+  dlg.innerHTML = `<div class="dh ${e.prod ? 'prod' : ''}">Відкат виконується…</div><div class="db"><ul class="steps">${steps.map(s => `<li>${s}</li>`).join('')}</ul></div>`;
+  MRFlow.run(steps, i => dlg.querySelectorAll('.steps li')[i].className = 'done', secs => {
+    MR.applyRollback(e, sha); envPage(e.id);
+    const withCleanup = blocked.filter(r => r.cleanup);
+    dlg.insertAdjacentHTML('beforeend', `<div class="db"><b style="color:var(--ok)">Відкат завершено за ${secs} с.</b> Активний реліз: <span class="sha">${sha}</span></div>
+      <div class="df">${withCleanup.length ? `<button onclick="dlg.close();envPage('${e.id}')">Пропустити прибирання</button><button class="primary" onclick="cleanup('${e.id}','${withCleanup[0].sha}')">Прибирання даних (${withCleanup.length})</button>` : `<button class="primary" onclick="dlg.close()">Готово</button>`}</div>`);
+  });
+}
+
+function cleanup(id, sha) {
+  const e = MR.env(id);
+  dlg.innerHTML = `<div class="dh">Прибирання даних релізу ${sha}</div><div class="db">
+    <p style="color:var(--mute);margin-top:0">Правила з образу ${sha}, режим --dry-run. Записи, створені з ${MR.fmtDate(e.releases.find(r => r.sha === sha).at)}.</p>
+    ${MR.cleanupRules.map(r => `<label class="rule"><input type="checkbox" ${r.count ? 'checked' : 'disabled'} data-n="${r.count}"><div><b>${r.rule}</b><div class="kv" style="margin:0">${r.description}</div></div><span class="n">${MRFlow.fmtN(r.count)}</span></label>`).join('')}
+  </div><div class="df"><button onclick="dlg.close()">Не прибирати</button><button class="danger" id="apply">Видалити записи</button></div>`;
+  const upd = () => { const n = [...dlg.querySelectorAll('input:checked')].reduce((a, i) => a + +i.dataset.n, 0); $('#apply').textContent = `Видалити ${MRFlow.fmtN(n)} записів`; $('#apply').disabled = !n; };
+  dlg.querySelectorAll('input').forEach(i => i.onchange = upd); upd();
+  $('#apply').onclick = () => { const picked = MR.cleanupRules.filter((r, i) => dlg.querySelectorAll('input')[i].checked); dlg.innerHTML = `<div class="dh">Прибирання завершено</div><div class="db">${picked.map(r => `<div>${r.rule}: прогноз ${MRFlow.fmtN(r.count)}, видалено ${MRFlow.fmtN(r.count)}</div>`).join('')}</div><div class="df"><button class="primary" onclick="dlg.close()">Готово</button></div>`; };
+}
+
+function history() {
+  let f = 'all';
+  const draw = () => {
+    const rows = MR.history.filter(h => f === 'all' || h.env === f);
+    app.innerHTML = `<h1>Історія</h1><div class="sub">Усі деплої, відкати й службові операції</div>
+      <div class="filters">${['all', ...MR.envs.map(e => e.id)].map(x => `<button class="${x === f ? 'primary' : ''}" data-f="${x}">${x === 'all' ? 'Усі' : x}</button>`).join('')}</div>
+      <table><thead><tr><th>Коли</th><th>Оточення</th><th>Дія</th><th>З → на</th><th class="hide-sm">Хто</th><th>Результат</th></tr></thead><tbody>
+      ${rows.map(h => `<tr><td>${MR.fmtDate(h.at)}</td><td>${h.env === 'production' ? '<span class="badge b-prod">production</span>' : h.env}</td><td>${MR.kindLabel[h.kind]}</td>
+        <td class="sha">${h.from} → ${h.to}</td><td class="hide-sm">${h.actor}</td>
+        <td>${h.status === 'ok' ? `<span style="color:var(--ok)">Успішно</span> · ${h.dur}` : `<span style="color:var(--prod)">${MR.statusLabel[h.status]}</span>`}${h.reason ? `<div class="kv" style="margin:2px 0 0">${h.reason}</div>` : ''}</td></tr>`).join('')}
+      </tbody></table>`;
+    app.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { f = b.dataset.f; draw(); });
+  };
+  draw();
+}
+
+function route() {
+  const h = location.hash.slice(1) || '/';
+  $('#nav-envs').className = h.startsWith('/history') ? '' : 'on'; $('#nav-hist').className = h.startsWith('/history') ? 'on' : '';
+  if (h.startsWith('/env/')) envPage(h.split('/')[2]); else if (h === '/history') history(); else overview();
+}
+addEventListener('hashchange', route); route();
+</script></body></html>
