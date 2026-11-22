@@ -56,7 +56,14 @@ type EnvFormInput = {
 };
 
 const page = (req: FastifyRequest, reply: FastifyReply, title: string, body: Html, status = 200) =>
-  sendHtml(reply, layout({ i: langOf(req), title, csrf: req.csrfToken, body, q: String((req.query as { q?: unknown }).q ?? '') }), status);
+  sendHtml(reply, layout({
+    i: langOf(req),
+    title,
+    csrf: req.csrfToken,
+    body,
+    q: String((req.query as { q?: unknown }).q ?? ''),
+    only: (req.query as { only?: unknown }).only === 'prod' ? 'prod' : undefined,
+  }), status);
 
 function parseCursor(s: unknown): Cursor | null | 'bad' {
   if (s == null || s === '') return null;

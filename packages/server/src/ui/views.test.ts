@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
@@ -163,6 +164,50 @@ describe('html and raw', () => {
   test('an Html value nested in html is not escaped a second time', () => {
     const inner = html`<i>${'a & b'}</i>`;
     expect(html`<p>${inner}</p>`.__html).toBe('<p><i>a &amp; b</i></p>');
+  });
+});
+
+describe('homeView', () => {
+  const i = i18n('en');
+
+  test.each([
+    { only: 'prod', q: '', message: 'No production deploys yet.' },
+    { only: 'all', q: '', message: 'Nothing deployed yet. Deploys from CI appear here.' },
+    { only: 'prod', q: 'missing', message: 'No environment, branch or commit matches “missing”.' },
+  ] as const)('shows the right empty feed for only=$only and q="$q"', ({ only, q, message }) => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, only, q, feed: [] }, NOW).__html;
+    expect(out).toContain(message);
+  });
+
+  test('marks an appended feed row current when its release is already open', () => {
+    const vm = homeVmFrom([env('stage')]);
+    const out = homeView(i, { ...vm, rest: 1, next: `${NOW}.cursor` }, NOW).__html;
+    const script = /<script>([\s\S]*?)<\/script>/.exec(out)![1]!;
+    const releaseId = 'rel-older';
+    const panel = { firstElementChild: { dataset: { release: releaseId } } };
+    const attributes = new Map<string, string>();
+    const rows = new Map<string, { setAttribute: typeof attributes.set }>();
+    const home = Object.assign(new EventTarget(), {
+      isConnected: true,
+      querySelector: (selector: string) => rows.get(selector) ?? null,
+    });
+    const document = Object.assign(new EventTarget(), {
+      readyState: 'loading',
+      currentScript: { parentElement: home },
+      body: new EventTarget(),
+      getElementById: (id: string) => id === 'panel' ? panel : null,
+    });
+    runInNewContext(script, {
+      document,
+      CSS: { escape: (value: string) => value },
+      MutationObserver: class { observe() {} disconnect() {} },
+    });
+    document.dispatchEvent(new Event('DOMContentLoaded'));
+
+    rows.set(`[data-release="${releaseId}"]`, { setAttribute: attributes.set.bind(attributes) });
+    document.body.dispatchEvent(new Event('htmx:afterSwap'));
+    expect(attributes.get('aria-current')).toBe('true');
   });
 });
 
@@ -386,6 +431,7 @@ describe('layout', () => {
   const page = layout(params);
   const header = /<header\b[\s\S]*?<\/header>/.exec(page)?.[0] ?? '';
   const newEnvLink = /<a\b[^>]*\bdata-testid="env-new"[^>]*>[\s\S]*?<\/a>/.exec(header)?.[0] ?? '';
+  const searchForm = (out: string) => /<form\b[^>]*\brole="search"[^>]*>[\s\S]*?<\/form>/.exec(out)?.[0] ?? '';
 
   test('the header has a brand link home and a New environment link to /env/new', () => {
     expect(header).toMatch(/<a href="\/"[^>]*><b[^>]*>(?:<span[^>]*>[^<]*<\/span>)?microrun<\/b><\/a>/);
@@ -399,10 +445,31 @@ describe('layout', () => {
   });
 
   test('the header search submits q and selects the home region', () => {
-    const form = /<form\b[^>]*\brole="search"[^>]*>[\s\S]*?<\/form>/.exec(header)?.[0] ?? '';
+    const form = searchForm(header);
+    const formTag = /^<form\b[^>]*>/.exec(form)?.[0];
     expect(form).toContain('data-testid="search"');
     expect(tagOf(form, 'search')).toContain('name="q"');
-    expect(/^<form\b[^>]*>/.exec(form)?.[0]).toContain('hx-select="#home"');
+    expect(formTag).toContain('method="get"');
+    expect(formTag).toContain('action="/"');
+    expect(formTag).toContain('hx-select="#home"');
+  });
+
+  test('live search triggers only when the home region exists', () => {
+    const trigger = /\bhx-trigger="([^"]*)"/.exec(searchForm(header))?.[1];
+    expect(trigger?.split(', ')).toEqual([
+      "input[!!document.getElementById('home')] changed delay:250ms from:find input",
+      "search[!!document.getElementById('home')] from:find input",
+    ]);
+  });
+
+  test('the search form includes only=prod only when the production filter is active', () => {
+    const prodParams = { ...params, only: 'prod' as const };
+    const allParams = { ...params, only: 'all' as const };
+    const form = searchForm(layout(prodParams));
+    expect(form).toContain('<input type="hidden" name="only" value="prod">');
+    expect(/<input\b[^>]*>/.exec(form)?.[0]).toContain('type="search"');
+    expect(searchForm(layout(allParams))).not.toContain('name="only"');
+    expect(searchForm(page)).not.toContain('name="only"');
   });
 
   test('the header wraps its content in a 1320 px column', () => {
