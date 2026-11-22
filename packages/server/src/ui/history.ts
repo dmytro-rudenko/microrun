@@ -31,7 +31,7 @@ function filterLink(href: string, label: string | Html, active: boolean): Html {
 }
 
 function row(i: I18n, h: HistoryVM): Html {
-  return html`<tr><td class="${td}">${i.date(h.at)}</td><td class="${td}">${h.isProduction ? html`<span class="rounded bg-prod px-2 py-0.5 text-[11px] font-bold tracking-wider text-white">${h.env}</span>` : h.env}</td><td class="${td}">${tr(i, `kind.${h.kind}`)}</td>
+  return html`<tr><td class="${td}">${i.date(h.at)}</td><td class="${td}">${h.isProduction ? html`<span class="rounded bg-prod px-2 py-0.5 text-[11px] font-bold tracking-wider text-on-prod">${h.env}</span>` : h.env}</td><td class="${td}">${tr(i, `kind.${h.kind}`)}</td>
 <td class="${td} font-mono font-bold">${short(h.from)} → ${short(h.to)}</td><td class="${td} ${hideSm}">${actorText(i, h.actor)}</td>
 <td class="${td}"><span data-status="${h.status}" class="${h.status === 'ok' ? 'font-semibold text-ok' : 'text-prod'}">${tr(i, `status.${h.status}`)}</span>${h.durationS !== null && html` · ${i.unit(h.durationS, 'second')}`}
 ${h.reason && html`<div class="${small}">${codeText(i, h.reason.code, h.reason.params)}</div>`}

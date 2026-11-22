@@ -15,6 +15,7 @@
   --ring: rgba(47, 111, 235, .22);
   --prod: #c62828;
   --prod-soft: #fdecea;
+  --on-prod: #fff;
   --ok: #1a7f37;
   --warn: #9a6700;
   --warn-soft: #fff8c5;
@@ -42,6 +43,7 @@
     --ring: rgba(88, 166, 255, .25);
     --prod: #ff6b6b;
     --prod-soft: rgba(255, 107, 107, .12);
+    --on-prod: #1a0505;
     --ok: #3fb950;
     --warn: #d29922;
     --warn-soft: rgba(210, 153, 34, .12);
@@ -64,6 +66,7 @@
   --color-ring: var(--ring);
   --color-prod: var(--prod);
   --color-prod-soft: var(--prod-soft);
+  --color-on-prod: var(--on-prod);
   --color-ok: var(--ok);
   --color-warn: var(--warn);
   --color-warn-soft: var(--warn-soft);

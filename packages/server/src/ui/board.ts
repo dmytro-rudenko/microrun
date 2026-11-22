@@ -63,7 +63,7 @@ const cardBorder = (r: ReleaseVM, selected: boolean) => (r.state === 'active' ? 
 
 export const short = (sha: string) => sha.slice(0, 7);
 
-export const prodTag = (i: I18n, e: EnvVM) => (e.isProduction ? html`<span class="rounded px-2 py-0.5 text-[11px] font-bold tracking-wider bg-prod text-white">${tr(i, 'env.prodTag')}</span>` : null);
+export const prodTag = (i: I18n, e: EnvVM) => (e.isProduction ? html`<span class="rounded px-2 py-0.5 text-[11px] font-bold tracking-wider bg-prod text-on-prod">${tr(i, 'env.prodTag')}</span>` : null);
 
 export const windowText = (i: I18n, e: EnvVM) => i.left(e.retentionS * 1000);
 

@@ -67,7 +67,7 @@ const BUTTON =
 
 const VARIANT: Record<'primary' | 'danger' | 'ghost', string> = {
   primary: 'bg-accent text-on-accent hover:opacity-90',
-  danger: 'bg-prod text-white hover:opacity-90',
+  danger: 'bg-prod text-on-prod hover:opacity-90',
   ghost: 'border border-line bg-card text-ink hover:border-accent',
 };
 

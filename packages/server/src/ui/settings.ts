@@ -184,8 +184,8 @@ const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 
 const H1 = 'mt-2 mb-1 font-display text-2xl font-bold';
 const TABLE = 'w-full border-collapse overflow-hidden rounded-[10px] border border-line bg-surface';
-const TH = 'border-b border-line px-3 py-2.5 text-left align-top text-xs font-semibold text-mute max-[900px]:p-2';
-const TD = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2';
+const TH = 'border-b border-line px-3 py-2.5 text-left align-middle text-xs font-semibold text-mute max-[900px]:p-2';
+const TD = 'border-b border-line px-3 py-2.5 text-left align-middle max-[900px]:p-2';
 const PROXY_OPTIONS = PROXY_MODES.map((m) => ({ value: m, label: m }));
 
 function deleteDialog(
@@ -264,7 +264,7 @@ ${alerts.length ? html`<div class="flex flex-col gap-3">${alerts}</div>` : ''}
 ${field({ id: 'f-server-name', label: tr(i, 'settings.servers.name'), control: input({ name: 'name', id: 'f-server-name', testid: 'server-name', required: true }) })}
 ${field({ id: 'f-server-proxy', label: tr(i, 'settings.servers.proxy'), control: select({ name: 'proxy_mode', id: 'f-server-proxy', options: PROXY_OPTIONS }) })}
 ${button({ testid: 'server-create', label: tr(i, 'settings.servers.create') })}</form>
-<table class="${TABLE}"><thead><tr><th class="${TH}">${tr(i, 'settings.servers.colName')}</th><th class="${TH}">${tr(i, 'settings.servers.colStatus')}</th><th class="${TH}">${tr(i, 'settings.servers.colVersion')}</th><th class="${TH}">${tr(i, 'settings.servers.proxy')}</th><th class="${TH}"></th></tr></thead>
+<div class="overflow-x-auto"><table class="${TABLE}"><thead><tr><th class="${TH}">${tr(i, 'settings.servers.colName')}</th><th class="${TH}">${tr(i, 'settings.servers.colStatus')}</th><th class="${TH}">${tr(i, 'settings.servers.colVersion')}</th><th class="${TH}">${tr(i, 'settings.servers.proxy')}</th><th class="${TH}"></th></tr></thead>
 <tbody>${servers.map(row)}</tbody></table>
 </div>`;
 }
