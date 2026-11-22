@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  closeWindow,
   decideDeploy,
   dueExpiry,
   lapseCleanup,
@@ -194,19 +193,6 @@ describe('nextContract', () => {
       mk('R3', 'active', { deployedAt: 3 }),
     ];
     expect(nextContract(rs)).toBe('R3');
-  });
-});
-
-describe('closeWindow', () => {
-  it('returns the available releases deployed before the target', () => {
-    const rs = [
-      mk('R1', 'available', { deployedAt: 1 }),
-      mk('R2', 'expired', { deployedAt: 2 }),
-      mk('R3', 'available', { deployedAt: 3 }),
-      mk('R4', 'active', { deployedAt: 4 }),
-      mk('R5', 'available', { deployedAt: 5 }),
-    ];
-    expect(sorted(closeWindow(rs, 'R4'))).toEqual(['R1', 'R3']);
   });
 });
 

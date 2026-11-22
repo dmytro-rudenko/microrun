@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { LANGS, LANG_NAMES, allKeys, codeMessage, codePlain, fromEnvLocale, i18n, isLang, negotiate, webLang } from './index.ts';
+import { LANGS, LANG_NAMES, allKeys, codeMessage, codePlain, fromEnvLocale, i18n, isLang, negotiate, webLang, type Lang } from './index.ts';
 
 describe('isLang and LANG_NAMES', () => {
   test('LANGS lists the eight supported languages in order', () => {
@@ -138,6 +138,155 @@ describe('t', () => {
     for (const k of ['cli.step', 'cli.done.ok', 'cli.done.failed', 'cli.done.rejected', 'cli.busy.wait', 'cli.unreachable', 'cli.usage']) {
       for (const lang of LANGS) expect(i18n(lang).t(k, { step: 'x', s: 1 })).not.toBe(k);
     }
+  });
+});
+
+describe('renamed texts', () => {
+  const cases: { key: string; params?: Record<string, string>; expected: Partial<Record<Lang, string>> }[] = [
+    {
+      key: 'approve.expires',
+      params: { list: '1111111, 2222222' },
+      expected: {
+        uk: 'Після схвалення ці релізи втратять можливість відкату: 1111111, 2222222.',
+        en: 'After approval, these releases can no longer be rolled back to: 1111111, 2222222.',
+        de: 'Nach der Freigabe ist kein Rollback mehr auf diese Releases möglich: 1111111, 2222222.',
+        fr: 'Après approbation, il ne sera plus possible de revenir à ces releases : 1111111, 2222222.',
+        es: 'Tras la aprobación, ya no se podrá volver a estos releases: 1111111, 2222222.',
+        'pt-BR': 'Após a aprovação, não será mais possível voltar para estas releases: 1111111, 2222222.',
+        pl: 'Po zatwierdzeniu nie będzie można wycofać się do tych wydań: 1111111, 2222222.',
+        'zh-CN': '批准后将无法再回滚到这些版本：1111111, 2222222。',
+      },
+    },
+    {
+      key: 'state.expired',
+      expected: {
+        uk: 'Відкат закрито',
+        en: 'Rollback closed',
+        de: 'Rollback geschlossen',
+        fr: 'Rollback fermé',
+        es: 'Rollback cerrado',
+        'pt-BR': 'Rollback encerrado',
+        pl: 'Wycofanie zamknięte',
+        'zh-CN': '回滚已关闭',
+      },
+    },
+    {
+      key: 'state.failed',
+      expected: {
+        uk: 'Невдалий деплой',
+        en: 'Deploy failed',
+        de: 'Deploy fehlgeschlagen',
+        fr: 'Échec du déploiement',
+        es: 'Despliegue fallido',
+        'pt-BR': 'Falha na implantação',
+        pl: 'Wdrożenie nieudane',
+        'zh-CN': '部署失败',
+      },
+    },
+    {
+      key: 'codes.COMMIT_EXPIRED',
+      params: { sha: 'abc1234', env: 'production' },
+      expected: {
+        uk: 'Коміт abc1234 не можна задеплоїти повторно на production: вікно відкату його релізу закрито. Зробіть новий коміт і задеплойте його.',
+        en: 'Commit abc1234 cannot be redeployed on production: the rollback window of its release has closed. Push a new commit and deploy it.',
+        de: 'Commit abc1234 kann auf production nicht erneut deployt werden: Das Rollback-Fenster seines Releases ist geschlossen. Pushen Sie einen neuen Commit und deployen Sie ihn.',
+        fr: 'Le commit abc1234 ne peut pas être redéployé sur production : la fenêtre de rollback de sa release est fermée. Poussez un nouveau commit et déployez-le.',
+        es: 'El commit abc1234 no se puede volver a desplegar en production: la ventana de rollback de su release está cerrada. Suba un nuevo commit y despliéguelo.',
+        'pt-BR': 'O commit abc1234 não pode ser implantado novamente em production: a janela de rollback da release foi encerrada. Envie um novo commit e implante-o.',
+        pl: 'Commitu abc1234 nie można ponownie wdrożyć na production: okno wycofania jego wydania zostało zamknięte. Wypchnij nowy commit i wdróż go.',
+        'zh-CN': '提交 abc1234 无法在 production 上重新部署：其版本的回滚窗口已关闭。请推送新提交并部署。',
+      },
+    },
+    {
+      key: 'col.window',
+      expected: {
+        uk: 'Залишилось для відкату',
+        en: 'Rollback time left',
+        de: 'Rollback noch möglich',
+        fr: 'Temps de rollback restant',
+        es: 'Tiempo restante de rollback',
+        'pt-BR': 'Tempo restante de rollback',
+        pl: 'Czas na wycofanie',
+        'zh-CN': '剩余回滚时间',
+      },
+    },
+    {
+      key: 'env.window',
+      params: { w: '5d' },
+      expected: {
+        uk: 'вікно відкату 5d',
+        en: 'rollback window 5d',
+        de: 'Rollback-Fenster 5d',
+        fr: 'fenêtre de rollback 5d',
+        es: 'ventana de rollback 5d',
+        'pt-BR': 'janela de rollback 5d',
+        pl: 'okno wycofania 5d',
+        'zh-CN': '回滚窗口 5d',
+      },
+    },
+    {
+      key: 'kind.expire',
+      expected: {
+        uk: 'Закриття вікна відкату',
+        en: 'Rollback window closed',
+        de: 'Rollback-Fenster geschlossen',
+        fr: 'Fenêtre de rollback fermée',
+        es: 'Ventana de rollback cerrada',
+        'pt-BR': 'Janela de rollback encerrada',
+        pl: 'Zamknięcie okna wycofania',
+        'zh-CN': '回滚窗口关闭',
+      },
+    },
+    { key: 'kind.approve', expected: { uk: 'Схвалення' } },
+    {
+      key: 'note.fail',
+      params: { col: 'users.email' },
+      expected: {
+        uk: 'Dry-run відхилив деплой: міграція видаляє колонку users.email. Справжню базу не змінено.',
+        en: 'Dry-run rejected the deploy: the migration drops column users.email. The real database was not touched.',
+        de: 'Dry-Run hat den Deploy abgelehnt: Die Migration entfernt die Spalte users.email. Die echte Datenbank blieb unverändert.',
+        fr: 'Le dry-run a refusé le déploiement : la migration supprime la colonne users.email. La vraie base n’a pas été modifiée.',
+        es: 'El dry-run rechazó el despliegue: la migración elimina la columna users.email. La base real no se tocó.',
+        'pt-BR': 'O dry-run recusou o deploy: a migração remove a coluna users.email. O banco real não foi alterado.',
+        pl: 'Dry-run odrzucił wdrożenie: migracja usuwa kolumnę users.email. Prawdziwa baza nie została zmieniona.',
+        'zh-CN': '预演拒绝了部署：迁移会删除列 users.email。真实数据库未被修改。',
+      },
+    },
+    {
+      key: 'reason.dryRun',
+      params: { col: 'users.email' },
+      expected: {
+        uk: 'Dry-run: руйнівна зміна схеми — міграція видаляє users.email.',
+        en: 'Dry-run: destructive schema change — the migration drops users.email.',
+        de: 'Dry-Run: destruktive Schemaänderung — die Migration entfernt users.email.',
+        fr: 'Dry-run : changement de schéma destructif — la migration supprime users.email.',
+        es: 'Dry-run: cambio de esquema destructivo — la migración elimina users.email.',
+        'pt-BR': 'Dry-run: mudança destrutiva de schema — a migração remove users.email.',
+        pl: 'Dry-run: destrukcyjna zmiana schematu — migracja usuwa users.email.',
+        'zh-CN': '预演：破坏性结构变更 — 迁移会删除 users.email。',
+      },
+    },
+    { key: 'login.error', expected: { uk: 'Неправильний логін або пароль.' } },
+    {
+      key: 'settings.f.health_timeout_s',
+      expected: {
+        uk: 'Тайм-аут healthcheck (с)',
+        en: 'Healthcheck timeout (seconds)',
+        de: 'Healthcheck-Timeout (Sekunden)',
+        fr: 'Délai du healthcheck (s)',
+        'zh-CN': 'healthcheck 超时（秒）',
+      },
+    },
+  ];
+
+  describe.each(LANGS)('%s', (lang) => {
+    test.each(cases.filter(({ expected }) => expected[lang] !== undefined))('$key', ({ key, params, expected }) => {
+      expect(i18n(lang).t(key, params)).toBe(expected[lang]);
+    });
+
+    test.each(['closeWindow.go', 'closeWindow.text'])('omits %s', (key) => {
+      expect(allKeys()[lang]).not.toContain(key);
+    });
   });
 });
 
