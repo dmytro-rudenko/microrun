@@ -2,14 +2,14 @@ import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
 import { boardView } from './board.ts';
-import { envView } from './env.ts';
-import { historyView } from './history.ts';
+import { envView, newEnvView } from './env.ts';
+import { envHistory } from './history.ts';
 import { layout } from './layout.ts';
 import { cleanupView, opProgressView, panelView } from './panel.ts';
 
 type EnvVM = Parameters<typeof boardView>[1][number];
 type ReleaseVM = Parameters<typeof panelView>[2];
-type HistoryVM = Parameters<typeof historyView>[1][number];
+type HistoryVM = Parameters<typeof envHistory>[1][number];
 
 const NOW = Date.UTC(2026, 10, 22, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -124,6 +124,8 @@ const tagOf = (out: string, testid: string) =>
 
 const isDisabled = (tag: string) => /\sdisabled(?=[\s=>/])/.test(tag);
 
+const parts = { history: html`<p>H</p>`, settings: html`<p>S</p>` };
+
 describe('html and raw', () => {
   test('html escapes markup in interpolated values', () => {
     const out = html`<p>${'<script>alert(1)</script>'}</p>`.__html;
@@ -160,10 +162,19 @@ describe('boardView', () => {
     expect(stageColumn).toContain('<a href="/env/env-stage"');
   });
 
-  test('each column links to its environment settings', () => {
+  test('each column links to its environment settings section on the env page', () => {
     const out = boardView(i, [env('prod'), env('stage')], NOW).__html;
-    expect(tagOf(out, 'env-settings-stage')).toContain('href="/settings/env/env-stage"');
-    expect(out).toContain(`data-testid="env-settings-prod">${i.t('nav.settings')}</a>`);
+    expect(out).toContain('href="/env/env-stage#settings" data-testid="env-settings-stage"');
+    expect(out).toContain('href="/env/env-prod#settings" data-testid="env-settings-prod"');
+    expect(tagOf(out, 'env-settings-stage')).not.toContain('/settings/env/');
+    expect(out).toContain(`data-testid="env-settings-stage">${i.t('env.settings')}</a>`);
+  });
+
+  test('the column heading carries no settings link', () => {
+    const out = boardView(i, [env('stage')], NOW).__html;
+    const heading = /<div class="ch">.*?<\/div>/s.exec(out)?.[0];
+    expect(heading).toBeDefined();
+    expect(heading).not.toContain('env-settings');
   });
 
   test('a release card has testid rel-<env>-<sha7>, data-state and panel wiring', () => {
@@ -249,7 +260,7 @@ describe('envView', () => {
         release({ id: 'r-c', sha: sha('3333333'), state: 'expired', windowLeftMs: null, windowPct: null }),
       ],
     });
-    const out = envView(i, e, NOW).__html;
+    const out = envView(i, e, NOW, parts).__html;
     expect(out.match(/data-testid="rel-stage-/g)).toHaveLength(3);
     expect(tagOf(out, 'rel-stage-1111111')).toContain('data-state="active"');
     expect(tagOf(out, 'rel-stage-2222222')).toContain('data-state="blocked"');
@@ -258,29 +269,79 @@ describe('envView', () => {
     expect(tagOf(out, 'rel-stage-1111111')).toContain('hx-target="#panel"');
   });
 
+  test('renders the releases, history and settings sections in that order', () => {
+    const out = envView(i, env('stage'), NOW, parts).__html;
+    const at = (id: string) => out.indexOf(`<section id="${id}">`);
+    expect(at('releases')).toBeGreaterThanOrEqual(0);
+    expect(at('releases')).toBeLessThan(at('history'));
+    expect(at('history')).toBeLessThan(at('settings'));
+    expect(out.match(/<section id=/g)).toHaveLength(3);
+  });
+
+  test('the history and settings parts land in their own sections', () => {
+    const out = envView(i, env('stage'), NOW, parts).__html;
+    const history = out.slice(out.indexOf('<section id="history">'), out.indexOf('<section id="settings">'));
+    const settings = out.slice(out.indexOf('<section id="settings">'));
+    expect(history).toContain('<p>H</p>');
+    expect(history).not.toContain('<p>S</p>');
+    expect(settings).toContain('<p>S</p>');
+    expect(settings).not.toContain('<p>H</p>');
+  });
+
+  test('the releases table sits inside the releases section', () => {
+    const out = envView(i, env('stage'), NOW, parts).__html;
+    const releases = out.slice(out.indexOf('<section id="releases">'), out.indexOf('<section id="history">'));
+    expect(releases).toContain('<table');
+    expect(releases).toContain('data-testid="rel-stage-');
+  });
+
+  test('a production env gets a prod jump nav carrying the PRODUCTION tag', () => {
+    const out = envView(i, env('prod'), NOW, parts).__html;
+    expect(tagOf(out, 'env-jump')).toContain('class="jump prod"');
+    const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
+    expect(nav).toContain('PRODUCTION');
+  });
+
+  test('a non-production env gets a plain jump nav without the prod tag', () => {
+    const out = envView(i, env('stage'), NOW, parts).__html;
+    const tag = tagOf(out, 'env-jump');
+    expect(tag).toContain('class="jump"');
+    expect(tag).not.toContain('jump prod');
+    const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
+    expect(nav).not.toContain('PRODUCTION');
+  });
+
+  test('the jump nav links to the three sections', () => {
+    const out = envView(i, env('stage'), NOW, parts).__html;
+    const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
+    expect(nav).toContain(`<a href="#releases">${i.t('env.sec.releases')}</a>`);
+    expect(nav).toContain(`<a href="#history">${i.t('env.sec.history')}</a>`);
+    expect(nav).toContain(`<a href="#settings">${i.t('env.sec.settings')}</a>`);
+  });
+
   test('shows the marker warning text only when the env has one', () => {
     const warning = { svc: 'api', other: 'prod', url: 'postgres://db-host/shop' };
     const text = i.t('marker.text', warning);
     expect(text).not.toBe('marker.text');
 
-    const warned = envView(i, env('stage', { markerWarnings: [warning] }), NOW).__html;
+    const warned = envView(i, env('stage', { markerWarnings: [warning] }), NOW, parts).__html;
     expect(warned).toContain(i.t('marker.title'));
     expect(warned).toContain(text);
 
-    const clean = envView(i, env('stage'), NOW).__html;
+    const clean = envView(i, env('stage'), NOW, parts).__html;
     expect(clean).not.toContain(text);
   });
 
   test('a commit message with markup is escaped in the table', () => {
     const e = env('stage', { releases: [release({ message: EVIL })] });
-    const out = envView(i, e, NOW).__html;
+    const out = envView(i, e, NOW, parts).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
 
   test.each(CREDENTIAL_URLS)('the marker warning url %s is shown without its secret', (url, masked, secret) => {
     const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }] });
-    const out = envView(i, e, NOW).__html;
+    const out = envView(i, e, NOW, parts).__html;
     expect(out).not.toContain(secret);
     expect(out).toContain(esc(masked));
     expect(boardView(i, [e], NOW).__html).not.toContain(secret);
@@ -292,15 +353,28 @@ describe('envView', () => {
     ['https://ci:hunter2@registry.example.com/shop', 'https://ci:***@registry.example.com/shop', 'hunter2'],
   ])('the storage target %s is shown without its secret', (target, masked, secret) => {
     const e = env('stage', { storage: { kind: 'registry', target } });
-    const out = envView(i, e, NOW).__html;
+    const out = envView(i, e, NOW, parts).__html;
     expect(out).not.toContain(secret);
     expect(out).toContain(esc(masked));
   });
 
   test.each(PLAIN_URLS)('the url %s without credentials is shown unchanged', (url) => {
     const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }], storage: { kind: 's3', target: url } });
-    const out = envView(i, e, NOW).__html;
+    const out = envView(i, e, NOW, parts).__html;
     expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('newEnvView', () => {
+  const i = i18n('en');
+
+  test('shows a back link, the new-environment title, the hint and the settings part in the settings section', () => {
+    const out = newEnvView(i, html`<p>S</p>`).__html;
+    expect(out).toContain(`<a class="back" href="/">${i.t('env.back')}</a>`);
+    expect(out).toContain(`<h1>${i.t('settings.env.newTitle')}</h1>`);
+    expect(out).toContain(i.t('env.newHint'));
+    expect(out).toContain('<section id="settings"><p>S</p></section>');
+    expect(out).not.toContain('data-testid="env-jump"');
   });
 });
 
@@ -316,13 +390,48 @@ describe('maskUrl', () => {
   });
 });
 
-describe('historyView', () => {
+describe('envHistory', () => {
   const i = i18n('en');
-  const envs = [
-    { id: 'env-dev', name: 'dev' },
-    { id: 'env-stage', name: 'stage' },
-    { id: 'env-prod', name: 'prod' },
-  ];
+  const rows = (n: number) => Array.from({ length: n }, (_, k) => op({ to: sha(`${k + 1}`.repeat(7)) }));
+  const bodyRows = (out: string) => out.slice(out.indexOf('<tbody')).match(/<tr[\s>]/g) ?? [];
+
+  test('shows the first 5 of 7 operations and a link to the full history', () => {
+    const out = envHistory(i, rows(7), 'env-stage', false).__html;
+    expect(bodyRows(out)).toHaveLength(5);
+    expect(tagOf(out, 'history-all')).toContain('href="/env/env-stage?history=all#history"');
+    const text = />([^<]*)<\/a>/.exec(out.slice(out.indexOf('data-testid="history-all"')))?.[1];
+    expect(text).toBe(i.t('env.historyAll', { n: i.num(7) }));
+    expect(text).toContain('7');
+  });
+
+  test('shows all 7 operations and no link when all is true', () => {
+    const out = envHistory(i, rows(7), 'env-stage', true).__html;
+    expect(bodyRows(out)).toHaveLength(7);
+    expect(out).not.toContain('history-all');
+  });
+
+  test('shows 5 operations and no link when there are exactly 5', () => {
+    const out = envHistory(i, rows(5), 'env-stage', false).__html;
+    expect(bodyRows(out)).toHaveLength(5);
+    expect(out).not.toContain('history-all');
+  });
+
+  test('shows the empty message and no table when there are no operations', () => {
+    const out = envHistory(i, [], 'env-stage', false).__html;
+    expect(tagOf(out, 'history-empty')).toBeDefined();
+    expect(out).toContain(i.t('env.historyEmpty'));
+    expect(out).not.toContain('<table');
+    expect(out).not.toContain('history-all');
+  });
+
+  test('has no env column', () => {
+    const out = envHistory(i, rows(2), 'env-stage', false).__html;
+    const head = out.slice(out.indexOf('<thead'), out.indexOf('</thead>'));
+    expect(head.match(/<th[\s>]/g)).toHaveLength(5);
+    for (const key of ['col.when', 'col.action', 'col.fromTo', 'col.who', 'col.result']) expect(head).toContain(i.t(key));
+    expect(head).not.toContain(i.t('col.env'));
+    expect(out).not.toContain('>stage<');
+  });
 
   test('renders one table row per operation', () => {
     const ops = [
@@ -330,18 +439,9 @@ describe('historyView', () => {
       op({ kind: 'rollback', from: sha('2222222'), to: sha('3333333') }),
       op({ kind: 'cleanup', from: sha('4444444'), to: sha('4444444') }),
     ];
-    const out = historyView(i, ops, envs, '').__html;
+    const out = envHistory(i, ops, 'env-stage', false).__html;
     expect(out.match(/<tr[\s>]/g)).toHaveLength(ops.length + 1);
     for (const head of ['2222222', '3333333', '4444444']) expect(out).toContain(head);
-  });
-
-  test('offers a filter for every env that links to /history?env=<id>', () => {
-    const out = historyView(i, [op()], envs, 'env-stage').__html;
-    for (const e of envs) {
-      expect(out).toContain(`/history?env=${e.id}`);
-      expect(out).toContain(`>${e.name}<`);
-    }
-    expect(out).toContain(i.t('hist.all'));
   });
 
   test.each(['en', 'uk', 'de'] as const)('a failure reason is localized through codes.* in %s', (lang) => {
@@ -349,7 +449,7 @@ describe('historyView', () => {
     const params = { col: 'users.email' };
     const text = li.t('codes.SCHEMA_DESTRUCTIVE', params);
     expect(text).not.toBe('codes.SCHEMA_DESTRUCTIVE');
-    const out = historyView(li, [op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params } })], envs, '').__html;
+    const out = envHistory(li, [op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params } })], 'env-stage', false).__html;
     expect(out).toContain(text);
   });
 
@@ -357,20 +457,20 @@ describe('historyView', () => {
     const li = i18n(lang);
     const label = li.t('kind.approve');
     expect(label).not.toBe('kind.approve');
-    const out = historyView(li, [op({ kind: 'approve', from: '—', to: sha('2222222') })], envs, '').__html;
+    const out = envHistory(li, [op({ kind: 'approve', from: '—', to: sha('2222222') })], 'env-stage', false).__html;
     expect(out).toContain(label);
     expect(out).not.toContain('kind.approve');
   });
 
   test('a hostile actor name is escaped', () => {
-    const out = historyView(i, [op({ actor: `ci:${EVIL}` })], envs, '').__html;
+    const out = envHistory(i, [op({ actor: `ci:${EVIL}` })], 'env-stage', false).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
 
   test('a hostile reason parameter is escaped exactly once', () => {
     const reason = { code: 'SCHEMA_DESTRUCTIVE', params: { col: EVIL } };
-    const out = historyView(i, [op({ status: 'rejected', reason })], envs, '').__html;
+    const out = envHistory(i, [op({ status: 'rejected', reason })], 'env-stage', false).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
     expect(out).not.toContain('&amp;lt;');
@@ -379,7 +479,20 @@ describe('historyView', () => {
 
 describe('layout', () => {
   const i = i18n('de');
-  const page = layout({ i, title: 'Environments', active: 'envs', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') });
+  const page = layout({ i, title: 'Environments', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') });
+
+  test('the header has a brand link home and a New environment link to /env/new', () => {
+    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
+    expect(header).toContain('<a href="/" class="brand"><b>microrun</b></a>');
+    expect(tagOf(page, 'env-new')).toContain('href="/env/new"');
+    expect(header).toContain(`>${i.t('env.newEnv')}</a>`);
+  });
+
+  test('the header no longer links to the history or servers pages', () => {
+    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
+    expect(header).not.toContain('href="/history"');
+    expect(header).not.toContain('href="/settings/servers"');
+  });
 
   test('has a lang select offering all 8 languages, the current one selected', () => {
     expect(tagOf(page, 'lang')).toMatch(/^<select/);
@@ -400,7 +513,7 @@ describe('layout', () => {
     const li = i18n(lang);
     const label = li.t('nav.language');
     expect(label).not.toBe('nav.language');
-    const out = layout({ i: li, title: 'Environments', active: 'envs', csrf: 'tok-123', body: raw('') });
+    const out = layout({ i: li, title: 'Environments', csrf: 'tok-123', body: raw('') });
     expect(tagOf(out, 'lang')).toContain(`aria-label="${label}"`);
     if (lang !== 'en') expect(out).not.toContain('aria-label="Language"');
   });
@@ -796,13 +909,13 @@ describe('production tag', () => {
     const stage = env('stage');
     const prodViews = [
       boardView(li, [prod], NOW).__html,
-      envView(li, prod, NOW).__html,
+      envView(li, prod, NOW, parts).__html,
       panelView(li, prod, prod.releases[0]!, 'csrf-token', NOW).__html,
     ];
     for (const out of prodViews) expect(out).toContain(`>${tag}<`);
     const stageViews = [
       boardView(li, [stage], NOW).__html,
-      envView(li, stage, NOW).__html,
+      envView(li, stage, NOW, parts).__html,
       panelView(li, stage, stage.releases[0]!, 'csrf-token', NOW).__html,
     ];
     for (const out of stageViews) expect(out).not.toContain(`>${tag}<`);
@@ -881,9 +994,10 @@ describe('every view in every language', () => {
       markerWarnings: [{ svc: 'api', other: 'prod', url: 'postgres://db-host/shop' }],
     });
 
-    expectNoRawKeys(lang, 'envView prod', envView(li, prod, NOW).__html);
-    expectNoRawKeys(lang, 'envView stage', envView(li, offline, NOW).__html);
-    expectNoRawKeys(lang, 'historyView', historyView(li, ops, [{ id: prod.id, name: prod.name }], '').__html);
+    expectNoRawKeys(lang, 'envView prod', envView(li, prod, NOW, parts).__html);
+    expectNoRawKeys(lang, 'envView stage', envView(li, offline, NOW, parts).__html);
+    expectNoRawKeys(lang, 'envHistory', envHistory(li, ops, prod.id, false).__html);
+    expectNoRawKeys(lang, 'newEnvView', newEnvView(li, html``).__html);
     for (const r of releases) {
       expectNoRawKeys(lang, `panelView prod ${r.id}`, panelView(li, prod, r, 'csrf-token', NOW).__html);
       expectNoRawKeys(lang, `cleanupView ${r.id}`, cleanupView(li, r, 'csrf-token').__html);

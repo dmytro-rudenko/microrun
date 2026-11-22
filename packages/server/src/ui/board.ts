@@ -90,11 +90,11 @@ function card(i: I18n, e: EnvVM, r: ReleaseVM, now: number, selected?: string): 
 
 function column(i: I18n, e: EnvVM, now: number, selected?: string): Html {
   return html`<section class="col${e.isProduction ? ' prod' : ''}" data-testid="col-${e.name}">
-<div class="ch"><h2><a href="/env/${e.id}">${e.name}</a></h2>${prodTag(i, e)}<a class="small" href="/settings/env/${e.id}" data-testid="env-settings-${e.name}">${tr(i, 'nav.settings')}</a></div>
+<div class="ch"><h2><a href="/env/${e.id}">${e.name}</a></h2>${prodTag(i, e)}</div>
 <div class="meta">${tr(i, 'env.branch', { b: e.branch })} · ${tr(i, 'env.window', { w: windowText(i, e) })} · ${agentBadge(i, e)}</div>
 ${e.markerWarnings.length > 0 && html`<div class="alert">⚠ ${tr(i, 'marker.short')}</div>`}${offlineAlert(i, e)}
 <div class="tl">${e.releases.map((r) => card(i, e, r, now, selected))}</div>
-<div class="small more"><a class="back" href="/env/${e.id}">${tr(i, 'env.open')}</a></div></section>`;
+<div class="small more"><a class="back" href="/env/${e.id}">${tr(i, 'env.open')}</a> · <a class="back" href="/env/${e.id}#settings" data-testid="env-settings-${e.name}">${tr(i, 'env.settings')}</a></div></section>`;
 }
 
 export function boardView(i: I18n, envs: EnvVM[], now: number, selected?: string): Html {

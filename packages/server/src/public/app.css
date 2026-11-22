@@ -3,10 +3,9 @@
 *{box-sizing:border-box}
 body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink);min-height:100vh}
 header{display:flex;align-items:center;gap:8px;padding:10px 20px;border-bottom:1px solid var(--line);background:var(--panel);flex-wrap:wrap}
-header b{font-size:16px;margin-right:12px}
+header b{font-size:16px}
 header a{color:var(--mute);text-decoration:none;padding:6px 12px;border-radius:6px}
-header a.on{background:var(--bg);color:var(--ink);font-weight:600}
-header form.lang{margin:0 0 0 auto}
+header form.lang{margin:0}
 header select{font:inherit;padding:5px 8px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink)}
 main{padding:20px;min-width:0;transition:margin .2s}
 .cols{display:grid;grid-template-columns:repeat(3,minmax(260px,1fr));gap:16px}
@@ -99,3 +98,12 @@ input[type=text]{font:inherit;width:100%;padding:8px;background:var(--bg);color:
 .rule .n{margin-left:auto;font-weight:700;white-space:nowrap}
 .sect{margin-top:18px;border-top:1px solid var(--line);padding-top:14px}
 @media (max-width:900px){.cols{grid-template-columns:1fr}.col.prod{order:-1}.hide-sm{display:none}main{padding:16px}.sub span{display:block}.bar.w120{width:100%}th,td{padding:8px}td .sha{white-space:normal}}
+header a.brand{color:var(--ink);padding:0;margin-right:12px}
+header a.new{margin-left:auto;background:var(--accent);color:var(--on-accent);font-weight:600}
+.jump{position:sticky;top:0;z-index:3;display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--bg);padding:8px 0;border-bottom:1px solid var(--line)}
+.jump.prod{border-bottom:2px solid var(--prod)}
+.jump .ctx{font-weight:700;margin-right:8px;display:flex;gap:6px;align-items:center}
+.jump a{padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);text-decoration:none}
+.jump a.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+main section[id]{scroll-margin-top:60px;margin-top:24px}
+main section[id]>h2{font-size:17px;margin:0 0 10px}
