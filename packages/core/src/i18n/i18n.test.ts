@@ -112,7 +112,7 @@ describe('t', () => {
   test('text pluralises and formats n like t', () => {
     for (const lang of LANGS) {
       const i = i18n(lang);
-      for (const n of [1, 3, 5, 1234]) expect(i.text('env.available', { n })).toBe(i.t('env.available', { n }));
+      for (const n of [1, 3, 5, 1234]) expect(i.text('env.showOlder', { n })).toBe(i.t('env.showOlder', { n }));
     }
   });
 
@@ -406,7 +406,7 @@ describe('codes.AGENT_ERROR', () => {
 
 describe('allKeys', () => {
   test('env page keys exist in every language', () => {
-    const keys = ['env.newEnv', 'env.settings', 'env.sec.releases', 'env.sec.history', 'env.sec.settings', 'env.historyEmpty', 'env.newHint', 'srv.usedBy', 'srv.add', 'srv.createPick'];
+    const keys = ['env.newEnv', 'env.inWindow', 'env.sec.releases', 'env.sec.history', 'env.sec.settings', 'env.historyEmpty', 'env.newHint', 'srv.usedBy', 'srv.add', 'srv.createPick'];
     for (const lang of LANGS) for (const k of keys) expect(i18n(lang).t(k, { n: 1, list: 'x' }), `${lang} ${k}`).not.toBe(k);
   });
 
