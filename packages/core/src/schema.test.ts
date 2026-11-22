@@ -195,6 +195,63 @@ describe('diffSchema classification', () => {
   });
 });
 
+describe('diffSchema column details', () => {
+  const one = (c: Column) => sql([{ name: 't', columns: [c] }]);
+
+  test('NOT NULL → nullable is add with its detail', () => {
+    expect(diffSchema(one(col('c', 'text', false)), one(col('c', 'text', true)))).toEqual([
+      { kind: 'add', object: 't.c', detail: 'NOT NULL → nullable' },
+    ]);
+  });
+
+  test('a changed default is add with both defaults in the detail', () => {
+    expect(diffSchema(one(col('c', 'int', true, '0')), one(col('c', 'int', true, '1')))).toEqual([
+      { kind: 'add', object: 't.c', detail: 'default 0 → 1' },
+    ]);
+    expect(diffSchema(one(col('c', 'int', true, '0')), one(col('c', 'int', true, null)))).toEqual([
+      { kind: 'add', object: 't.c', detail: 'default 0 → null' },
+    ]);
+  });
+
+  test('a type change and a nullability change on one column give two entries', () => {
+    expect(diffSchema(one(col('c', 'int', true)), one(col('c', 'bigint', false)))).toEqual([
+      { kind: 'add', object: 't.c', detail: 'int → bigint' },
+      { kind: 'drop', object: 't.c', detail: 'nullable → NOT NULL' },
+    ]);
+  });
+
+  test('a removed column and a NOT NULL column without default carry their details', () => {
+    const d = diffSchema(one(col('a', 'int')), one(col('b', 'int', false)));
+    expect(d).toEqual([
+      { kind: 'drop', object: 't.a', detail: 'column removed' },
+      { kind: 'drop', object: 't.b', detail: 'NOT NULL column added without default' },
+    ]);
+  });
+
+  test('a new NOT NULL column with a default is add with column added', () => {
+    expect(diffSchema(one(col('a', 'int')), sql([{ name: 't', columns: [col('a', 'int'), col('b', 'int', false, '0')] }]))).toEqual([
+      { kind: 'add', object: 't.b', detail: 'column added' },
+    ]);
+  });
+
+  test.each([
+    ['varchar', 'varchar(10)'],
+    ['numeric', 'numeric(10,2)'],
+    ['bigint', 'smallint'],
+    ['int', 'numeric(10,0)'],
+    ['text', 'varchar(10)'],
+    ['numeric(10,2)', 'numeric(10,1)'],
+  ])('%s → %s is drop', (from, to) => {
+    expect(summary(typeChange(from, to))).toEqual(['drop t.c']);
+  });
+
+  test('a changed index is warn', () => {
+    const base = withUsers((u) => u.indexes.push(idx('by_email', ['email'])));
+    const next = withUsers((u) => u.indexes.push(idx('by_email', ['email', 'id'])));
+    expect(diffSchema(base, next)).toEqual([{ kind: 'warn', object: 'index:by_email', detail: 'index changed' }]);
+  });
+});
+
 describe('normalization', () => {
   test('character varying(20) and varchar(20) give no diff', () => {
     expect(typeChange('character varying(20)', 'varchar(20)')).toEqual([]);

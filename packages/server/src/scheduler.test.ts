@@ -404,3 +404,50 @@ describe('Scheduler', () => {
     ]);
   });
 });
+
+describe('Scheduler tickEnv edges', () => {
+  function logged() {
+    const lines: string[] = [];
+    const s = new Scheduler({ repo, agent, clock: () => now, decryptStorage: () => STORAGE, log: (line) => lines.push(line) });
+    return { s, lines };
+  }
+
+  it('runs no contract while the agent is offline', async () => {
+    const env = await mkEnv('staging', { contractCmd: 'npm run contract' });
+    await mkRelease(env.id, 'aaa', 'active', 1000);
+    agent.online.delete(serverId);
+    await scheduler.tick();
+    expect(agent.calls).toEqual([]);
+    expect(await ops(env.id, 'contract')).toEqual([]);
+  });
+
+  it('logs a failed purge, keeps imagePurgedAt unset and still stores the others', async () => {
+    const env = await mkEnv('staging');
+    await mkRelease(env.id, 'aaa', 'active', 2000, { stored: false });
+    const old = await mkRelease(env.id, 'bbb', 'expired', 1000, { supersededAt: T0 - RETENTION_MS });
+    agent.handlers.deleteImages = () => { throw new AgentError('STORAGE_FAILED', { reason: 'locked' }); };
+    const { s, lines } = logged();
+    await s.tick();
+    expect((await release(old.id)).imagePurgedAt).toBeNull();
+    expect(lines).toEqual([expect.stringContaining('scheduler: env staging: purge bbb:')]);
+    expect(agent.of('storeImages').map((c) => c.sha)).toEqual(['aaa']);
+  });
+
+  it('logs a failed store and keeps the release unstored', async () => {
+    const env = await mkEnv('staging');
+    const r = await mkRelease(env.id, 'aaa', 'active', 1000, { stored: false });
+    agent.handlers.storeImages = () => { throw new AgentError('STORAGE_FAILED', { reason: 'disk full' }); };
+    const { s, lines } = logged();
+    await s.tick();
+    expect((await release(r.id)).stored).toBe(false);
+    expect(lines).toEqual([expect.stringContaining('scheduler: env staging: store aaa:')]);
+  });
+
+  it('does not store a release whose image was already purged', async () => {
+    const env = await mkEnv('staging');
+    await mkRelease(env.id, 'aaa', 'active', 2000);
+    await mkRelease(env.id, 'bbb', 'expired', 1000, { stored: false, imagePurgedAt: T0 - 1, supersededAt: T0 - RETENTION_MS });
+    await scheduler.tick();
+    expect(agent.of('storeImages')).toEqual([]);
+  });
+});

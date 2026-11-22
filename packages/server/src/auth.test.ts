@@ -120,6 +120,11 @@ describe('login', () => {
     expect(c!.secure).toBeFalsy();
   });
 
+  it('sets the session cookie for 12 h on path /', async () => {
+    const c = sessionCookie(await login(app, 'admin', PASSWORD));
+    expect(c).toMatchObject({ maxAge: 43200, path: '/' });
+  });
+
   it('the 6th attempt within a minute from one IP returns 429', async () => {
     for (let i = 0; i < 5; i++) {
       expect((await login(app, 'admin', 'wrong-password-123', '10.0.0.9')).statusCode).toBe(401);

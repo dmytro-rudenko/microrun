@@ -198,6 +198,89 @@ describe('createHandler command mapping', () => {
   });
 });
 
+describe('createHandler layer arguments', () => {
+  function recording() {
+    const seen: [string, unknown[]][] = [];
+    const rec = <R>(name: string, result: R) => async (...args: unknown[]) => { seen.push([name, args]); return result; };
+    const snapshot = { kind: 'sql' as const, engine: 'postgres' as const, tables: [] };
+    const layers = {
+      writeMarker: rec('writeMarker', undefined),
+      snapshotSchema: rec('snapshotSchema', snapshot),
+      dryRunExpand: rec('dryRunExpand', { snapshot, log: 'dry' }),
+      runOneOff: rec('runOneOff', { exitCode: 3, stdout: 'out', log: 'log' }),
+      fetchImages: rec('fetchImages', undefined),
+      deleteImages: rec('deleteImages', undefined),
+      inspectEnv: rec('inspectEnv', envResult),
+    };
+    return { seen, snapshot, handler: createHandler({ stateDir: tmp(), docker: fakeDocker().run, layers: layers as never }) };
+  }
+
+  const storage = { kind: 'local' as const, path: '/var/microrun' };
+
+  it('maps every command onto its layer call and result shape', async () => {
+    const { seen, snapshot, handler } = recording();
+    await expect(handler(key('w'), { type: 'writeMarker', db: dbRef(), envId: 'e9', envName: 'qa' })).resolves.toEqual({ envId: 'e9' });
+    await expect(handler(key('s'), { type: 'snapshotSchema', db: dbRef() })).resolves.toEqual({ snapshot });
+    await expect(handler(key('d'), { type: 'dryRunExpand', db: dbRef(), image: 'img:1', cmd: 'migrate', migrationTables: ['m'], opId: 'op-9', env: { A: '1' } }))
+      .resolves.toEqual({ snapshot, log: 'dry' });
+    await expect(handler(key('r'), { type: 'runCommand', compose: compose(), service: 'api', image: 'img:1', cmd: 'migrate', args: ['--x'], env: { B: '2' } }))
+      .resolves.toEqual({ exitCode: 3, stdout: 'out', log: 'log' });
+    await expect(handler(key('f'), { type: 'fetchImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' } })).resolves.toEqual({});
+    await expect(handler(key('x'), { type: 'deleteImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' } })).resolves.toEqual({});
+    await expect(handler(key('i'), inspectCmd())).resolves.toEqual(envResult);
+    expect(seen).toEqual([
+      ['writeMarker', [dbRef(), 'e9', 'qa']],
+      ['snapshotSchema', [dbRef()]],
+      ['dryRunExpand', [dbRef(), { image: 'img:1', cmd: 'migrate', migrationTables: ['m'], opId: 'op-9', env: { A: '1' } }]],
+      ['runOneOff', [compose(), { service: 'api', image: 'img:1', cmd: 'migrate', args: ['--x'], env: { B: '2' } }]],
+      ['fetchImages', [storage, 'prod', 'abc', { api: 'img:1' }]],
+      ['deleteImages', [storage, 'prod', 'abc', { api: 'img:1' }]],
+      ['inspectEnv', [compose(), 'DATABASE_URL']],
+    ]);
+  });
+
+  it('runs one layer call for two concurrent requests with the same opId:step', async () => {
+    let calls = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const handler = createHandler({ stateDir: tmp(), docker: fakeDocker().run, layers: { inspectEnv: async () => { calls++; await gate; return envResult; } } });
+    const both = Promise.all([handler(key(), inspectCmd()), handler(key(), inspectCmd())]);
+    await vi.waitFor(() => expect(calls).toBe(1));
+    release();
+    await expect(both).resolves.toEqual([envResult, envResult]);
+    expect(calls).toBe(1);
+  });
+
+  it('records each compose dir once in dirs.json', async () => {
+    const stateDir = tmp();
+    const handler = createHandler({ stateDir, docker: fakeDocker().run, layers: { inspectEnv: async () => envResult } });
+    await handler(key('a'), inspectCmd('/srv/a'));
+    await handler(key('b'), inspectCmd('/srv/b'));
+    await handler(key('c'), inspectCmd('/srv/a'));
+    expect(JSON.parse(readFileSync(join(stateDir, 'dirs.json'), 'utf8'))).toEqual(['/srv/a', '/srv/b']);
+  });
+
+  it('throws IMAGE_PULL_FAILED naming the image when the pull fails', async () => {
+    const handler = createHandler({ stateDir: tmp(), docker: fakeDocker().run });
+    await expect(handler(key('pull'), { type: 'pullImages', refs: ['registry/missing:1'] }))
+      .rejects.toMatchObject({ code: 'IMAGE_PULL_FAILED', params: { image: 'registry/missing:1' } });
+  });
+
+  it.each([
+    ['v2.30.1', false],
+    ['2.31.0', false],
+    ['3.0.0', false],
+    ['2.30.0-desktop.1', false],
+    ['2.29.99', true],
+    ['1.40.0', true],
+    ['garbage', true],
+  ])('compose version %s warns: %s', async (version, warns) => {
+    const handler = createHandler({ stateDir: tmp(), docker: fakeDocker({ compose: version }).run });
+    const ping = (await handler(key('p'), { type: 'ping' })) as { warning?: string };
+    expect(ping.warning !== undefined).toBe(warns);
+  });
+});
+
 describe('createHandler pullImages', () => {
   it('returns the image ID for a local image without RepoDigests and does not pull it', async () => {
     const d = fakeDocker({ local: { 'web:dev': { Id: 'sha256:1111', RepoDigests: [] } } });
@@ -345,6 +428,25 @@ describe('runAgent', () => {
     expect(seen[0]).toEqual({ key: { opId: 'op-1', step: 'ping' }, cmd: { type: 'ping' } });
     c.ws.send(JSON.stringify({ t: 'req', id: 'r2', key: { opId: 'op-1', step: 'pull' }, cmd: { type: 'pullImages', refs: ['x'] } }));
     await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'r2', ok: false, code: 'INVALID_REQUEST', params: { reason: 'bad ref' } });
+  });
+
+  it('answers a malformed req and a plain thrown Error with INVALID_REQUEST, and ignores non-JSON frames', async () => {
+    const { srv } = await start(async () => { throw new Error('disk full'); });
+    const c = await srv.next();
+    await c.messages.next();
+    c.ws.send('not json');
+    c.ws.send(JSON.stringify({ t: 'req', id: 'bad', key: { opId: 'op-1' }, cmd: { type: 'nope' } }));
+    await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'bad', ok: false, code: 'INVALID_REQUEST', params: { reason: 'malformed request' } });
+    c.ws.send(JSON.stringify({ t: 'req', id: 'r3', key: { opId: 'op-1', step: 's' }, cmd: { type: 'ping' } }));
+    await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'r3', ok: false, code: 'INVALID_REQUEST', params: { reason: 'disk full' }, message: 'disk full' });
+  });
+
+  it('strips trailing slashes from the server url', async () => {
+    const srv = await server();
+    cleanup.push(srv.close);
+    const agent = runAgent({ url: `${srv.url}//`, token: 't', stateDir: tmp(), version: '9.9.9', handler: async () => ({}), docker: fakeDocker().run, exit: () => {} });
+    cleanup.push(() => agent.stop());
+    expect((await srv.next()).url).toBe('/api/v1/agent');
   });
 
   it('answers ping with pong and runs requests concurrently', async () => {

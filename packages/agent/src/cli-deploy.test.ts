@@ -341,3 +341,61 @@ describe('runDeploy ENV_BUSY', () => {
     expect(h.sleeps.length).toBeLessThanOrEqual(60);
   });
 });
+
+describe('runDeploy edge cases', () => {
+  const en = i18n('en');
+
+  it.each([['-5'], ['soon']])('returns 3 with usage for --busy-timeout %s', async (value) => {
+    const h = harness([]);
+    expect(await runDeploy([...baseArgs, `--busy-timeout=${value}`], {}, h.deps)).toBe(3);
+    expect(h.calls).toHaveLength(0);
+    expect(h.text()).toContain(en.t('cli.usage'));
+  });
+
+  it('returns 3 with usage for an unknown flag', async () => {
+    const h = harness([]);
+    expect(await runDeploy([...baseArgs, '--force'], {}, h.deps)).toBe(3);
+    expect(h.calls).toHaveLength(0);
+  });
+
+  it('strips trailing slashes from --url', async () => {
+    const h = harness([accepted('op-9'), sse([done('succeeded')])]);
+    await runDeploy([...without(baseArgs, '--url'), '--url', `${URL_BASE}//`], {}, h.deps);
+    expect(h.calls.map((c) => c.url)).toEqual([`${URL_BASE}/api/v1/deploy`, `${URL_BASE}/api/v1/operations/op-9/events`]);
+  });
+
+  it('prints only running steps', async () => {
+    const h = harness([accepted(), sse([{ type: 'step', step: 'pull', status: 'running' }, { type: 'step', step: 'expand', status: 'done' }, done('succeeded')])]);
+    await runDeploy(baseArgs, {}, h.deps);
+    expect(h.text()).toContain(en.t('cli.step', { step: 'pull' }));
+    expect(h.text()).not.toContain(en.t('cli.step', { step: 'expand' }));
+  });
+
+  it('reads CRLF frames and a final done event without a trailing blank line', async () => {
+    const text = `event: log\r\ndata: {"line":"crlf line"}\r\n\r\nevent: done\r\ndata: ${JSON.stringify(done('succeeded'))}`;
+    const h = harness([accepted(), rawSse(text)]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(0);
+    expect(h.text()).toContain('crlf line');
+  });
+
+  it('returns 3 with cli.unreachable when the events request fails or is not ok', async () => {
+    const thrown = harness([accepted(), new Error('reset')]);
+    expect(await runDeploy(baseArgs, {}, thrown.deps)).toBe(3);
+    expect(thrown.text()).toContain(en.t('cli.unreachable'));
+    const notOk = harness([accepted(), new Response('nope', { status: 500 })]);
+    expect(await runDeploy(baseArgs, {}, notOk.deps)).toBe(3);
+    expect(notOk.text()).toContain(en.t('cli.unreachable'));
+  });
+
+  it('prints HTTP <status> and returns 3 for a non-JSON error answer', async () => {
+    const h = harness([new Response('<html>bad gateway</html>', { status: 502 })]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(3);
+    expect(h.text()).toContain('HTTP 502');
+  });
+
+  it('returns 1 for a 422 without a code', async () => {
+    const h = harness([json(422, {})]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(1);
+    expect(h.text()).toContain('HTTP 422');
+  });
+});

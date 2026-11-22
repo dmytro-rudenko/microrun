@@ -209,6 +209,18 @@ describe('parseEnvForm', () => {
     });
   });
 
+  describe('defaults and required fields', () => {
+    test('an empty position and health_timeout_s fall back to 0 and 120', () => {
+      expect(parsed({ position: '', health_timeout_s: '' })).toMatchObject({ position: 0, healthTimeoutS: 120 });
+    });
+
+    test('every required text field is reported when empty', () => {
+      const required = ['name', 'branch', 'server_id', 'compose_project', 'compose_dir', 'migration_service', 'db_url_env', 'expand_cmd'];
+      const errors = failed(Object.fromEntries(required.map((k) => [k, ''])));
+      expect(Object.keys(errors).sort()).toEqual([...required].sort());
+    });
+  });
+
   describe('storage', () => {
     test('registry fields map into the registry config', () => {
       const value = parsed({

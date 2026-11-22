@@ -641,6 +641,42 @@ describe('Orchestrator cleanup', () => {
     expect(apply).toMatchObject({ status: 'succeeded', code: null });
     expect(await rel(B)).toMatchObject({ cleanupState: 'applied' });
   });
+
+  it('logs the non-protocol stdout lines and the per-rule counts of a cleanup', async () => {
+    await deploy(A);
+    await deploy(B);
+    await deploy(C);
+    await rollback(A);
+    const relC = (await rel(C))!;
+    const preview = await settle((await ops()).find((o) => o.kind === 'cleanup' && o.toReleaseId === relC.id)!.id);
+    expect(preview.log).toContain('starting');
+    const apply = await cleanupOp(await orch.requestCleanupApply(relC.id, ['orphans', 'gone']));
+    expect(apply.log).toContain('orphans: expected 5, deleted 3');
+    expect(apply.log).toContain('gone: expected 0, deleted 0');
+    expect(apply.log).toContain('CLEANUP_MISMATCH: expected 5, deleted 3');
+    expect(apply).toMatchObject({ code: 'CLEANUP_MISMATCH', params: { expected: 5, deleted: 3 } });
+    expect(apply.cleanupResult).toEqual([
+      { rule: 'orphans', expected: 5, deleted: 3 },
+      { rule: 'gone', expected: 0, deleted: 0 },
+    ]);
+  });
+
+  it('fails a cleanup with MIGRATION_FAILED {exitCode} on a non-zero exit and stores no preview', async () => {
+    agent.handlers.runCommand = (cmd) => (cmd.cmd === 'npm run cleanup' ? { exitCode: 4, stdout: '', log: '' } : agent.fallback(cmd));
+    await deploy(A);
+    await deploy(B);
+    await rollback(A);
+    const relB = (await rel(B))!;
+    const preview = await settle((await ops()).find((o) => o.kind === 'cleanup' && o.toReleaseId === relB.id)!.id);
+    expect(preview).toMatchObject({ status: 'failed', code: 'MIGRATION_FAILED', params: { exitCode: 4 } });
+    expect(relB).toMatchObject({ cleanupState: 'pending', cleanupPreview: null });
+  });
+
+  it('rejects cleanup of a release that is not blocked with INVALID_REQUEST', async () => {
+    await deploy(A);
+    expect(await orch.requestCleanupPreview((await rel(A))!.id)).toMatchObject({ rejected: { code: 'INVALID_REQUEST' } });
+    expect(await orch.requestCleanupApply((await rel(A))!.id, [])).toMatchObject({ rejected: { code: 'INVALID_REQUEST' } });
+  });
 });
 
 describe('Orchestrator resume', () => {
