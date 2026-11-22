@@ -1,20 +1,10 @@
 import type { I18n } from '@microrun/core/i18n';
-import type { ReleaseState } from '@microrun/core/state';
 import { codeText, html, raw, tr, type Html } from './html.ts';
-import { blockedNote, diffView, prodTag, short, stateLabel, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
+import { blockedNote, diffView, prodTag, short, releaseBadge, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
 import { alert, button, checkbox, confirmName } from './form.ts';
 
 const SMALL = 'text-xs text-mute';
 const SECT = 'mt-[18px] flex flex-col gap-2 border-t border-line pt-3.5';
-const BADGE = 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold';
-const BADGE_STATE: Record<ReleaseState, string> = {
-  active: 'text-ok',
-  available: 'text-accent',
-  blocked: 'text-prod bg-prod-soft',
-  expired: 'text-mute',
-  failed: 'text-warn bg-warn-soft',
-};
-
 const post = (url: string, csrf: string) =>
   html`hx-post="${url}" hx-headers="${JSON.stringify({ 'x-csrf-token': csrf })}" hx-target="#panel"`;
 
@@ -118,7 +108,7 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
 <button class="float-right border-0 bg-transparent px-1 text-[22px] text-mute" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
 <div class="${SMALL}">${env.name} ${prodTag(i, env)}</div>
 <div id="panel-alert"></div>
-<h2 class="my-1 text-2xl font-bold"><span class="font-mono font-bold">${short(r.sha)}</span> <span class="${BADGE} ${BADGE_STATE[r.state]}">${stateLabel(i, r.state)}</span></h2><div>${r.message}</div>
+<h2 class="my-1 text-2xl font-bold"><span class="font-mono font-bold">${short(r.sha)}</span> ${releaseBadge(i, r.state)}</h2><div>${r.message}</div>
 <div class="mt-1 mb-3 text-xs text-mute">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="mt-2.5 mb-1 text-xs text-mute">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
 ${r.state === 'available' && html`${rollbackSection(i, env, r, csrf)}${closeWindowSection(i, env, r, csrf)}`}

@@ -1,17 +1,7 @@
 import type { I18n } from '@microrun/core/i18n';
-import type { ReleaseState } from '@microrun/core/state';
 import { alert } from './form.ts';
 import { html, maskUrl, tr, type Html } from './html.ts';
-import { agentBadge, diffView, markerText, notes, offlineAlert, prodTag, short, stateLabel, windowBar, windowLeft, windowText, type EnvVM, type ReleaseVM } from './board.ts';
-
-const BADGE = 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold';
-const BADGE_STATE: Record<ReleaseState, string> = {
-  active: 'text-ok',
-  available: 'text-accent',
-  blocked: 'text-prod bg-prod-soft',
-  expired: 'text-mute',
-  failed: 'text-warn bg-warn-soft',
-};
+import { agentBadge, diffView, markerText, notes, offlineAlert, prodTag, short, releaseBadge, windowBar, windowLeft, windowText, type EnvVM, type ReleaseVM } from './board.ts';
 
 const CELL = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2';
 const HEAD = `${CELL} text-xs font-semibold text-mute`;
@@ -21,7 +11,7 @@ function row(i: I18n, e: EnvVM, r: ReleaseVM): Html {
   const left = windowLeft(i, r);
   return html`<tr class="${ROW}${r.state === 'expired' ? ' [&>td]:text-mute' : ''}" data-testid="rel-${e.name}-${short(r.sha)}" data-state="${r.state}" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="click, keydown[key=='Enter']" tabindex="0">
 <td class="${CELL}"><span class="font-mono font-bold">${short(r.sha)}</span> ${r.message}<div class="text-xs text-mute">${r.author} · ${i.date(r.deployedAt)}</div>${notes(i, r)}</td>
-<td class="${CELL}"><span class="${BADGE} ${BADGE_STATE[r.state]}">${stateLabel(i, r.state)}</span></td><td class="${CELL} max-[900px]:hidden">${diffView(i, r)}</td>
+<td class="${CELL}">${releaseBadge(i, r.state)}</td><td class="${CELL} max-[900px]:hidden">${diffView(i, r)}</td>
 <td class="${CELL}">${left ? html`${left}${windowBar(r, ' w-[120px] max-[900px]:w-full')}` : '—'}</td></tr>`;
 }
 

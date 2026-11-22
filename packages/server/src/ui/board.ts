@@ -69,6 +69,16 @@ export const windowText = (i: I18n, e: EnvVM) => i.left(e.retentionS * 1000);
 
 export const stateLabel = (i: I18n, s: ReleaseState) => tr(i, `state.${s}`);
 
+const BADGE_STATE: Record<ReleaseState, string> = {
+  active: 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold text-ok',
+  available: 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold text-accent',
+  blocked: 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold text-prod bg-prod-soft',
+  expired: 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold text-mute',
+  failed: 'inline-block whitespace-nowrap rounded-full border px-2 text-xs font-semibold text-warn bg-warn-soft',
+};
+
+export const releaseBadge = (i: I18n, s: ReleaseState) => html`<span class="${BADGE_STATE[s]}">${stateLabel(i, s)}</span>`;
+
 export const agentBadge = (i: I18n, e: EnvVM) =>
   html`<span class="${e.agentOnline ? 'text-ok' : 'text-mute'}">● ${tr(i, e.agentOnline ? 'agent.online' : 'agent.offline')}</span>`;
 
