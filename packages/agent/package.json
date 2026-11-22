@@ -3,12 +3,45 @@
   "version": "1.0.0",
   "description": "microrun agent and deploy CLI",
   "license": "MIT",
+  "author": "dmytro-rudenko",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dmytro-rudenko/microrun.git",
+    "directory": "packages/agent"
+  },
+  "homepage": "https://github.com/dmytro-rudenko/microrun#readme",
+  "bugs": {
+    "url": "https://github.com/dmytro-rudenko/microrun/issues"
+  },
+  "keywords": [
+    "docker",
+    "docker-compose",
+    "deploy",
+    "rollback",
+    "release",
+    "agent",
+    "cli"
+  ],
   "type": "module",
-  "bin": { "microrun": "dist/bin.js" },
-  "files": ["dist"],
-  "engines": { "node": ">=26" },
+  "bin": {
+    "microrun": "dist/bin.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=26"
+  },
   "exports": {
     "./handler": "./src/handler.ts"
+  },
+  "publishConfig": {
+    "exports": {
+      "./package.json": "./package.json"
+    },
+    "access": "public"
   },
   "scripts": {
     "build": "tsup",
