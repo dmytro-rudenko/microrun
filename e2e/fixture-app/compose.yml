@@ -1,0 +1,38 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: pw
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 1s
+      retries: 30
+  web:
+    image: microrun-fixture:v1
+    environment:
+      DATABASE_URL: postgres://postgres:pw@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+  worker:
+    image: microrun-fixture:v1
+    command: ["node", "-e", "setInterval(()=>{},1e9)"]
+    healthcheck:
+      disable: true
+    environment:
+      DATABASE_URL: postgres://postgres:pw@db:5432/postgres
+    depends_on:
+      db:
+        condition: service_healthy
+  edge:
+    image: nginx:1.27-alpine
+    ports:
+      - "18080:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - web
+volumes:
+  dbdata:
