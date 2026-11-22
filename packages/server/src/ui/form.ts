@@ -58,7 +58,7 @@ export const select = (p: {
   )}</select>`;
 
 export const checkbox = (p: { name: string; id?: string; checked: boolean; label?: Html; attrs?: Html }): Html => {
-  const box = html`<input type="checkbox" name="${p.name}"${attr('id', p.id)}${flag('checked', p.checked)} class="size-4 rounded border-line bg-field text-accent focus:ring-2 focus:ring-ring focus:ring-offset-0"${p.attrs}>`;
+  const box = html`<input type="checkbox" name="${p.name}"${attr('id', p.id)}${flag('checked', p.checked)} class="size-4 rounded border-line bg-field text-accent checked:border-transparent checked:bg-current focus:ring-2 focus:ring-ring focus:ring-offset-0"${p.attrs}>`;
   return p.label ? html`<label class="inline-flex items-center gap-2 text-sm text-ink">${box}${p.label}</label>` : box;
 };
 
