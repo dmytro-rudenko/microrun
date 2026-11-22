@@ -99,8 +99,38 @@ describe('diffSchema classification', () => {
     expect(summary(typeChange('smallint', 'int'))).toEqual(['add t.c']);
   });
 
-  test('numeric(p,s) → numeric(p2>=p, s2>=s) is add', () => {
+  test('numeric(p,s) → numeric(p2,s2) with p2−s2 ≥ p−s and s2 ≥ s is add', () => {
     expect(summary(typeChange('numeric(10,2)', 'numeric(12,4)'))).toEqual(['add t.c']);
+  });
+
+  test('smallint → bigint is add', () => {
+    expect(summary(typeChange('smallint', 'bigint'))).toEqual(['add t.c']);
+  });
+
+  test('bigint → int is drop', () => {
+    expect(summary(typeChange('bigint', 'int'))).toEqual(['drop t.c']);
+  });
+
+  test('numeric(10,0) → numeric(10,5) cuts integer digits and is drop', () => {
+    expect(summary(typeChange('numeric(10,0)', 'numeric(10,5)'))).toEqual(['drop t.c']);
+  });
+
+  test('numeric(p,s) → unbounded numeric is add on postgres', () => {
+    expect(summary(typeChange('numeric(10,2)', 'numeric'))).toEqual(['add t.c']);
+  });
+
+  test('mysql decimal widening follows the numeric rule', () => {
+    const mysqlChange = (from: string, to: string): DiffEntry[] =>
+      diffSchema(
+        sql([{ name: 't', columns: [col('c', from)] }], 'mysql'),
+        sql([{ name: 't', columns: [col('c', to)] }], 'mysql'),
+      );
+    expect(summary(mysqlChange('decimal(10,2)', 'decimal(12,4)'))).toEqual(['add t.c']);
+    expect(summary(mysqlChange('decimal(10,0)', 'decimal(10,5)'))).toEqual(['drop t.c']);
+  });
+
+  test('mysql normalizes decimal to numeric', () => {
+    expect(normalizeType('mysql', 'decimal(10,2)')).toBe('numeric(10,2)');
   });
 
   test('new unique index is warn', () => {

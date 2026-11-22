@@ -74,7 +74,7 @@ export function normalizeType(engine: SqlEngine, raw: string): string {
     const v = t.replace(/^character varying/, 'varchar');
     return POSTGRES_ALIASES[v] ?? v;
   }
-  if (engine === 'mysql') return t.replace(/^(tinyint|smallint|mediumint|int|integer|bigint)\(\d+\)/, '$1');
+  if (engine === 'mysql') return t.replace(/^(tinyint|smallint|mediumint|int|integer|bigint)\(\d+\)/, '$1').replace(/^decimal\b/, 'numeric');
   return sqliteAffinity(t);
 }
 
@@ -107,6 +107,8 @@ function parseType(t: string): { base: string; args: number[] | null } {
   return { base: m[1] ?? t, args: (m[2] ?? '').split(',').map(Number) };
 }
 
+const INTEGER_RANK = ['smallint', 'int', 'bigint'];
+
 function isWidening(from: string, to: string): boolean {
   const a = parseType(from);
   const b = parseType(to);
@@ -115,12 +117,14 @@ function isWidening(from: string, to: string): boolean {
     return a.args !== null && (b.args[0] ?? 0) > (a.args[0] ?? 0);
   }
   if (a.base === 'varchar' && to === 'text') return true;
-  if (from === 'int' && to === 'bigint') return true;
-  if (from === 'smallint' && to === 'int') return true;
-  if (a.base === 'numeric' && b.base === 'numeric' && a.args !== null && b.args !== null) {
+  const ia = INTEGER_RANK.indexOf(from);
+  const ib = INTEGER_RANK.indexOf(to);
+  if (ia >= 0 && ib >= 0) return ib > ia;
+  if (a.base === 'numeric' && b.base === 'numeric' && a.args !== null) {
+    if (b.args === null) return true;
     const [p = 0, s = 0] = a.args;
     const [p2 = 0, s2 = 0] = b.args;
-    return p2 >= p && s2 >= s;
+    return p2 - s2 >= p - s && s2 >= s;
   }
   return false;
 }
