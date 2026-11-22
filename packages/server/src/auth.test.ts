@@ -149,19 +149,32 @@ describe('login page language', () => {
 
   it.each([
     ['the mr_lang cookie', { cookie: 'mr_lang=de', 'accept-language': 'fr' }, 'de'],
-    ['Accept-Language', { 'accept-language': 'fr-FR,fr;q=0.9' }, 'fr'],
-    ['Accept-Language over an unsupported cookie', { cookie: 'mr_lang=xx', 'accept-language': 'pl' }, 'pl'],
+    ['en, ignoring Accept-Language', { 'accept-language': 'fr-FR,fr;q=0.9' }, 'en'],
+    ['en over an unsupported cookie', { cookie: 'mr_lang=xx', 'accept-language': 'pl' }, 'en'],
     ['en by default', {}, 'en'],
   ])('renders GET /login in the language of %s', async (_, headers, lang) => {
     const res = await app.inject({ method: 'GET', url: '/login', headers });
     expect(res.body).toContain(`LOGIN lang=${lang}`);
   });
 
-  it('renders a failed POST /login in the negotiated language', async () => {
+  it('renders a failed POST /login in the cookie language', async () => {
     const f = form({ username: 'admin', password: 'wrong-password-123' });
-    const res = await app.inject({ method: 'POST', url: '/login', headers: { ...f.headers, 'accept-language': 'uk' }, payload: f.payload });
+    const res = await app.inject({ method: 'POST', url: '/login', headers: { ...f.headers, cookie: 'mr_lang=uk', 'accept-language': 'de' }, payload: f.payload });
     expect(res.statusCode).toBe(401);
     expect(res.body).toContain('LOGIN lang=uk');
+  });
+
+  it('GET /login?lang=de stores the choice and renders German', async () => {
+    const res = await app.inject({ method: 'GET', url: '/login?lang=de' });
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toContain('LOGIN lang=de');
+    expect(res.cookies.find((c) => c.name === 'mr_lang')).toMatchObject({ value: 'de', maxAge: 31536000, httpOnly: true, path: '/' });
+  });
+
+  it('GET /login?lang=xx is ignored', async () => {
+    const res = await app.inject({ method: 'GET', url: '/login?lang=xx' });
+    expect(res.body).toContain('LOGIN lang=en');
+    expect(res.cookies.find((c) => c.name === 'mr_lang')).toBeUndefined();
   });
 });
 
