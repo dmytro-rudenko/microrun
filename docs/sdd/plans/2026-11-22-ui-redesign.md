@@ -328,9 +328,9 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
 **Complexity:** routine
 **Satisfies:** final cleanup; whole suite green
 
-- [ ] **Step 1: check unused** — `grep -rnE "'(confirm\.ask|confirm\.yes|confirm\.no|env\.open|env\.settings|env\.available)'" packages/server/src packages/agent/src e2e` must print nothing outside catalogs; if it prints, stop and report.
-- [ ] **Step 2: delete** those six keys from all 8 language blocks in `catalogs/ui.ts`.
-- [ ] **Step 3: run** — `pnpm -r build && pnpm test`, expect all passed; then `pnpm verify`, expect exit 0.
+- [x] **Step 1: check unused** — `grep -rnE "'(confirm\.ask|confirm\.yes|confirm\.no|env\.open|env\.settings|env\.available)'" packages/server/src packages/agent/src e2e` must print nothing outside catalogs; if it prints, stop and report.
+- [x] **Step 2: delete** those six keys from all 8 language blocks in `catalogs/ui.ts`.
+- [x] **Step 3: run** — `pnpm -r build && pnpm test`, expect all passed; then `pnpm verify`, expect exit 0.
 
 ---
 
