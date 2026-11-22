@@ -309,8 +309,8 @@ describe('UI', () => {
     const res = await app.inject({ method: 'GET', url: '/', headers: { cookie, accept: 'text/html' } });
     expect(res.statusCode).toBe(200);
     expect(res.headers['content-type']).toMatch(/^text\/html/);
-    expect(res.body).toContain('data-testid="col-production"');
-    expect(res.body).toContain('data-testid="col-staging"');
+    expect(res.body).toContain('data-testid="env-link-production"');
+    expect(res.body).toContain('data-testid="env-link-staging"');
     expect(res.body).toContain(`data-testid="rel-production-${A.slice(0, 7)}"`);
   });
 
@@ -1031,13 +1031,14 @@ describe('UI routes', () => {
       expect((await get('/env/new')).statusCode).toBe(200);
     });
 
-    it('warns on the board card and the panel when an active release image is not stored', async () => {
+    it('flags the environment on the home index and warns in the panel when an active release image is not stored', async () => {
       await deploy(A);
       const relA = await release(A);
       const warn = en.t('storage.failedWarn');
-      expect((await get('/')).body).not.toContain(warn);
+      const prodLink = (body: string) => /<a[^>]*data-testid="env-link-production"[\s\S]*?<\/a>/.exec(body)?.[0] ?? '';
+      expect(prodLink((await get('/')).body)).toContain(en.t('home.dot.ok'));
       await db('releases').where({ id: relA.id }).update({ stored: 0 });
-      expect((await get('/')).body).toContain(warn);
+      expect(prodLink((await get('/')).body)).toContain(en.t('home.dot.warn'));
       expect((await get(`/panel/${relA.id}`)).body).toContain(warn);
     });
 
@@ -1102,7 +1103,7 @@ describe('UI routes', () => {
       expect(body).toContain('href="/env/new"');
       expect(body).not.toContain('href="/history"');
       expect(body).not.toContain('href="/settings/servers"');
-      expect(body).toContain(`href="/env/${prodId}#settings" data-testid="env-settings-production"`);
+      expect(body).toMatch(new RegExp(`<a[^>]*href="/env/${prodId}"[^>]*data-testid="env-link-production"`));
     });
 
     it('shows releases and settings on one env page with a production strip', async () => {

@@ -1,13 +1,13 @@
 import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
-import { boardView } from './board.ts';
+import type { EnvVM } from './board.ts';
 import { envView, newEnvView } from './env.ts';
 import { releaseHistory } from './history.ts';
+import { homeView, type HomeVM } from './home.ts';
 import { layout } from './layout.ts';
 import { cleanupView, opProgressView, panelView } from './panel.ts';
 
-type EnvVM = Parameters<typeof boardView>[1][number];
 type ReleaseVM = Parameters<typeof panelView>[2];
 type HistoryVM = Parameters<typeof releaseHistory>[1][number];
 
@@ -118,6 +118,23 @@ function env(name: string, over: Partial<EnvVM> = {}): EnvVM {
   };
 }
 
+function homeVmFrom(envs: EnvVM[]): HomeVM {
+  return {
+    q: '',
+    only: 'all',
+    feed: envs.flatMap((e) => e.releases.map((r) => ({
+      ...r,
+      envId: e.id,
+      envName: e.name,
+      isProduction: e.isProduction,
+      schemaChange: r.diff.length > 0,
+    }))),
+    rest: 0,
+    next: null,
+    envs: envs.map(({ id, name, isProduction }) => ({ id, name, isProduction, dot: 'ok' })),
+  };
+}
+
 const tagOf = (out: string, testid: string) =>
   new RegExp(`<[^>]*data-testid="${testid}"[^>]*>`).exec(out)?.[0];
 
@@ -146,106 +163,6 @@ describe('html and raw', () => {
   test('an Html value nested in html is not escaped a second time', () => {
     const inner = html`<i>${'a & b'}</i>`;
     expect(html`<p>${inner}</p>`.__html).toBe('<p><i>a &amp; b</i></p>');
-  });
-});
-
-describe('boardView', () => {
-  const i = i18n('en');
-
-  test('renders one column per env in the order given, each heading linking to the env page', () => {
-    const out = boardView(i, [env('prod'), env('stage'), env('dev')], NOW).__html;
-    const at = (name: string) => out.indexOf(`data-testid="col-${name}"`);
-    expect(at('prod')).toBeGreaterThanOrEqual(0);
-    expect(at('prod')).toBeLessThan(at('stage'));
-    expect(at('stage')).toBeLessThan(at('dev'));
-    const stageColumn = out.slice(at('stage'), at('dev'));
-    expect(stageColumn).toContain('<a href="/env/env-stage"');
-  });
-
-  test('each column links to its environment settings section on the env page', () => {
-    const out = boardView(i, [env('prod'), env('stage')], NOW).__html;
-    expect(out).toContain('href="/env/env-stage#settings" data-testid="env-settings-stage"');
-    expect(out).toContain('href="/env/env-prod#settings" data-testid="env-settings-prod"');
-    expect(tagOf(out, 'env-settings-stage')).not.toContain('/settings/env/');
-    expect(out).toContain(`data-testid="env-settings-stage">${i.t('env.settings')}</a>`);
-  });
-
-  test('the column heading carries no settings link', () => {
-    const out = boardView(i, [env('stage')], NOW).__html;
-    const heading = /<div class="flex items-center justify-between gap-2">.*?<\/div>/s.exec(out)?.[0];
-    expect(heading).toBeDefined();
-    expect(heading).not.toContain('env-settings');
-  });
-
-  test('a release card has testid rel-<env>-<sha7>, data-state and panel wiring', () => {
-    const e = env('stage', {
-      releases: [
-        release({ id: 'r-active', sha: sha('1111111'), state: 'active' }),
-        release({ id: 'r-blocked', sha: sha('2222222'), state: 'blocked', blocked: { at: NOW - HOUR, to: sha('3333333') } }),
-      ],
-    });
-    const out = boardView(i, [e], NOW).__html;
-    const active = tagOf(out, 'rel-stage-1111111');
-    const blocked = tagOf(out, 'rel-stage-2222222');
-    expect(active).toContain('data-state="active"');
-    expect(blocked).toContain('data-state="blocked"');
-    expect(active).toContain('hx-get="/panel/r-active"');
-    expect(active).toContain('hx-target="#panel"');
-  });
-
-  test('warns on the card of an active or available release whose image is not stored, and only there', () => {
-    const warn = i.t('storage.failedWarn');
-    const e = env('stage', {
-      releases: [
-        release({ id: 'r1', sha: sha('1111111'), state: 'active', stored: false }),
-        release({ id: 'r2', sha: sha('2222222'), state: 'available', stored: false }),
-        release({ id: 'r3', sha: sha('3333333'), state: 'available', stored: true }),
-        release({ id: 'r4', sha: sha('4444444'), state: 'expired', stored: false }),
-        release({ id: 'r5', sha: sha('5555555'), state: 'blocked', stored: false }),
-      ],
-    });
-    const out = boardView(i, [e], NOW).__html;
-    const card = (head: string, next?: string) =>
-      out.slice(out.indexOf(`data-testid="rel-stage-${head}"`), next ? out.indexOf(`data-testid="rel-stage-${next}"`) : undefined);
-    expect(card('1111111', '2222222')).toContain(warn);
-    expect(card('2222222', '3333333')).toContain(warn);
-    expect(card('3333333', '4444444')).not.toContain(warn);
-    expect(card('4444444', '5555555')).not.toContain(warn);
-    expect(card('5555555')).not.toContain(warn);
-  });
-
-  test('a commit message with markup is escaped on the card', () => {
-    const e = env('stage', { releases: [release({ message: EVIL })] });
-    const out = boardView(i, [e], NOW).__html;
-    expect(out).not.toContain('<img');
-    expect(out).toContain(EVIL_ESCAPED);
-  });
-
-  test.each(LANGS)('renders in %s without any untranslated catalog key', (lang) => {
-    const li = i18n(lang);
-    const envs = [
-      env('prod', {
-        releases: [
-          release({ id: 'r1', sha: sha('1111111'), state: 'active' }),
-          release({ id: 'r2', sha: sha('2222222'), state: 'available' }),
-          release({ id: 'r3', sha: sha('3333333'), state: 'blocked', blocked: { at: NOW - HOUR, to: sha('1111111') } }),
-          release({ id: 'r4', sha: sha('4444444'), state: 'expired', windowLeftMs: null, windowPct: null }),
-          release({
-            id: 'r5',
-            sha: sha('5555555'),
-            state: 'failed',
-            failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users_email' } },
-            diff: [{ kind: 'drop', object: 'users', detail: 'email' }],
-          }),
-        ],
-      }),
-      env('stage', {
-        agentOnline: false,
-        builtin: true,
-        markerWarnings: [{ svc: 'api', other: 'prod', url: 'postgres://db-host/shop' }],
-      }),
-    ];
-    expectNoRawKeys(lang, 'boardView', boardView(li, envs, NOW, 'r2').__html);
   });
 });
 
@@ -334,7 +251,9 @@ describe('envView', () => {
     const out = envView(i, e, NOW, parts).__html;
     expect(out).not.toContain(secret);
     expect(out).toContain(esc(masked));
-    expect(boardView(i, [e], NOW).__html).not.toContain(secret);
+    const vm = homeVmFrom([e]);
+    vm.envs[0]!.dot = 'mismatch';
+    expect(homeView(i, vm, NOW).__html).not.toContain(secret);
     expect(panelView(i, e, e.releases[0]!, 'csrf-token', html``).__html).not.toContain(secret);
   });
 
@@ -932,14 +851,18 @@ describe('production tag', () => {
     expect(tag).not.toBe('env.prodTag');
     const prod = env('prod');
     const stage = env('stage');
+    const homeIndex = (e: EnvVM) => {
+      const out = homeView(li, homeVmFrom([e]), NOW).__html;
+      return out.slice(out.indexOf('data-testid="env-index"'));
+    };
     const prodViews = [
-      boardView(li, [prod], NOW).__html,
+      homeIndex(prod),
       envView(li, prod, NOW, parts).__html,
       panelView(li, prod, prod.releases[0]!, 'csrf-token', html``).__html,
     ];
     for (const out of prodViews) expect(out).toContain(`>${tag}<`);
     const stageViews = [
-      boardView(li, [stage], NOW).__html,
+      homeIndex(stage),
       envView(li, stage, NOW, parts).__html,
       panelView(li, stage, stage.releases[0]!, 'csrf-token', html``).__html,
     ];
@@ -1028,6 +951,6 @@ describe('every view in every language', () => {
       expectNoRawKeys(lang, `cleanupView ${r.id}`, cleanupView(li, r, 'csrf-token').__html);
     }
     expectNoRawKeys(lang, 'panelView offline', panelView(li, offline, offline.releases[0]!, 'csrf-token', html``).__html);
-    expectNoRawKeys(lang, 'boardView', boardView(li, [prod, offline], NOW).__html);
+    expectNoRawKeys(lang, 'homeView', homeView(li, homeVmFrom([prod, offline]), NOW).__html);
   });
 });

@@ -7,11 +7,12 @@ import { windowLeftMs } from '@microrun/core/state';
 import { finished, streamOperation, type AppDeps, type Frame } from '../app.ts';
 import { setLangCookie } from '../auth.ts';
 import { decrypt, encrypt, hashToken, newToken } from '../crypto.ts';
-import { composeRefOf, type EnvRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
-import { boardView, short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
+import { composeRefOf, type Cursor, type EnvRow, type FeedRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
+import { short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
 import { envView, newEnvView } from '../ui/env.ts';
 import { alert } from '../ui/form.ts';
 import { releaseHistory, type HistoryVM } from '../ui/history.ts';
+import { envDot, feedPage, homeView, type FeedRowVM, type HomeVM } from '../ui/home.ts';
 import { codeText, html, type Html } from '../ui/html.ts';
 import { layout } from '../ui/layout.ts';
 import { opProgressView, panelView } from '../ui/panel.ts';
@@ -55,7 +56,34 @@ type EnvFormInput = {
 };
 
 const page = (req: FastifyRequest, reply: FastifyReply, title: string, body: Html, status = 200) =>
-  sendHtml(reply, layout({ i: langOf(req), title, csrf: req.csrfToken, body }), status);
+  sendHtml(reply, layout({ i: langOf(req), title, csrf: req.csrfToken, body, q: String((req.query as { q?: unknown }).q ?? '') }), status);
+
+function parseCursor(s: unknown): Cursor | null | 'bad' {
+  if (s == null || s === '') return null;
+  const match = typeof s === 'string' && /^(\d+)\.([A-Za-z0-9-]+)$/.exec(s);
+  if (!match) return 'bad';
+  const at = Number(match[1]);
+  return Number.isSafeInteger(at) ? { at, id: match[2]! } : 'bad';
+}
+
+const cursorOf = (r: { deployedAt: number; id: string }) => `${r.deployedAt}.${r.id}`;
+
+function feedFilters(query: { q?: unknown; only?: unknown }): Pick<HomeVM, 'q' | 'only'> {
+  return { q: String(query.q ?? '').trim().toLowerCase().slice(0, 100), only: query.only === 'prod' ? 'prod' : 'all' };
+}
+
+const feedRowVM = (r: FeedRow): FeedRowVM => ({
+  id: r.id,
+  envId: r.envId,
+  envName: r.envName,
+  isProduction: r.envIsProduction,
+  sha: r.commitSha,
+  message: r.message,
+  author: r.author,
+  deployedAt: r.deployedAt,
+  state: r.state,
+  schemaChange: Array.isArray(r.schemaDiff) && r.schemaDiff.length > 0,
+});
 
 function readStorage(d: AppDeps, env: EnvRow): StorageConfig | null {
   try {
@@ -361,12 +389,44 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
 
   app.addHook('preHandler', app.requireAdmin);
 
-  app.get('/', async (req, reply) => {
+  async function loadFeed(filters: Pick<HomeVM, 'q' | 'only'>, before: Cursor | null) {
+    const { rows, rest } = await repo.listRecentReleases({ q: filters.q, productionOnly: filters.only === 'prod', before, limit: 25 });
+    const last = rows.at(-1);
+    return { ...filters, feed: rows.map(feedRowVM), rest, next: last ? cursorOf(last) : null };
+  }
+
+  app.get<{ Querystring: { q?: unknown; only?: unknown } }>('/', async (req, reply) => {
     const i = langOf(req);
-    const servers = await repo.listServers();
-    const now = clock();
-    const envs = await Promise.all((await repo.listEnvs()).map((e) => envVM(d, e, servers, now)));
-    return page(req, reply, i.t('nav.envs'), boardView(i, envs, now));
+    const filters = feedFilters(req.query);
+    const { q } = filters;
+    const [envs, servers, statuses, operations, feed, shaHits] = await Promise.all([
+      repo.listEnvs(), repo.listServers(), repo.envStatuses(), repo.activeOperations(), loadFeed(filters, null),
+      q ? repo.envIdsWithShaPrefix(q) : new Set<string>(),
+    ]);
+    const busy = new Set(operations.map((o) => o.envId));
+    const online = new Set(servers.filter((s) => d.hub.isOnline(s.id)).map((s) => s.id));
+    const warnings = d.scheduler.markerWarnings();
+    const index = envs.filter((e) => e.name.toLowerCase().includes(q) || e.branch.toLowerCase().includes(q) || shaHits.has(e.id))
+      .map(({ id, name, isProduction, serverId }) => {
+        const { latest, active, lastOp } = statuses.get(id) ?? {};
+        const dot = envDot({
+          mismatch: (warnings.get(id) ?? []).length > 0,
+          online: online.has(serverId),
+          busy: busy.has(id),
+          latest: latest?.state ?? null,
+          activeUnstored: active?.stored === false,
+          contractFailed: lastOp?.code === 'CONTRACT_FAILED' && lastOp.toReleaseId === active?.id,
+        });
+        return { id, name, isProduction, dot };
+      });
+    if (req.headers['hx-target'] === 'home') reply.header('HX-Reswap', 'outerHTML');
+    return page(req, reply, i.t('nav.envs'), homeView(i, { ...feed, envs: index }, clock()));
+  });
+
+  app.get<{ Querystring: { q?: unknown; only?: unknown; before?: unknown } }>('/feed', async (req, reply) => {
+    const before = parseCursor(req.query.before);
+    if (before === 'bad') return reply.code(400).send();
+    return sendHtml(reply, feedPage(langOf(req), await loadFeed(feedFilters(req.query), before), clock()));
   });
 
   app.get('/env/new', async (req, reply) => newEnvPage(d, req, reply, { values: {}, errors: {}, isNew: true }));
