@@ -39,12 +39,17 @@ async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (e: Operati
   let name: string | undefined;
   let data: string[] = [];
   const dispatch = (): boolean => {
-    if (data.length === 0) return false;
-    const parsed = JSON.parse(data.join('\n')) as { type?: string };
-    const type = name ?? parsed.type;
+    const type = name;
+    const text = data.join('\n');
+    const pending = data.length > 0;
     name = undefined;
     data = [];
-    return onEvent({ ...parsed, type } as OperationEvent);
+    if (!pending || (type !== 'step' && type !== 'log' && type !== 'done')) return false;
+    try {
+      return onEvent({ ...JSON.parse(text), type } as OperationEvent);
+    } catch {
+      return false;
+    }
   };
   for (;;) {
     const { done, value } = await reader.read();
@@ -119,10 +124,6 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
     err(t('cli.unreachable'));
     return 3;
   };
-  const apiError = async (res: Response): Promise<string> => {
-    const body = (await res.json().catch(() => null)) as Partial<ApiError> | null;
-    return body?.code ? `${body.code}: ${body.message ?? ''}` : `HTTP ${res.status}`;
-  };
 
   let waitedMs = 0;
   for (;;) {
@@ -141,28 +142,25 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
       const { operationId } = (await res.json()) as DeployAccepted;
       return stream(operationId);
     }
-    if (res.status === 200) {
-      const body = (await res.json().catch(() => null)) as { code?: string } | null;
-      if (body?.code === 'ALREADY_ACTIVE') {
-        out(t('cli.done.ok'));
-        return 0;
-      }
+    const body = (await res.json().catch(() => null)) as Partial<ApiError> | null;
+    if (res.status === 200 && body?.code === 'ALREADY_ACTIVE') {
+      out(t('cli.done.ok'));
+      return 0;
     }
-    if (res.status === 409) {
-      const body = (await res.clone().json().catch(() => null)) as Partial<ApiError> | null;
-      if (body?.code === 'ENV_BUSY') {
-        if (waitedMs + RETRY_MS > busyTimeoutS * 1000) {
-          err(await apiError(res));
-          return 3;
-        }
-        out(t('cli.busy.wait', { s: RETRY_MS / 1000 }));
-        await sleep(RETRY_MS);
-        waitedMs += RETRY_MS;
-        continue;
+    const line = body?.code ? `${body.code}: ${body.message ?? ''}` : `HTTP ${res.status}`;
+    if (res.status === 409 && body?.code === 'ENV_BUSY') {
+      if (waitedMs + RETRY_MS > busyTimeoutS * 1000) {
+        err(line);
+        return 3;
       }
+      out(t('cli.busy.wait', { s: RETRY_MS / 1000 }));
+      await sleep(RETRY_MS);
+      waitedMs += RETRY_MS;
+      continue;
     }
-    err(await apiError(res));
-    return res.status === 422 ? 2 : 3;
+    err(line);
+    if (body?.code && REJECT_CODES.includes(body.code)) return 2;
+    return res.status === 422 ? 1 : 3;
   }
 
   async function stream(operationId: string): Promise<number> {
@@ -181,7 +179,8 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
             out(t('cli.done.ok'));
             result = 0;
           } else {
-            if (e.code) err(`${e.code}: ${e.message}`);
+            const detail = e.code ? `${e.code}: ${e.message}` : e.message;
+            if (detail) err(detail);
             const rejected = e.code !== null && REJECT_CODES.includes(e.code);
             err(t(rejected ? 'cli.done.rejected' : 'cli.done.failed'));
             result = rejected ? 2 : 1;
@@ -193,6 +192,10 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
     } catch {
       return unreachable();
     }
-    return result ?? unreachable();
+    if (result === undefined) {
+      err(t('cli.streamClosed', { op: operationId }));
+      return 3;
+    }
+    return result;
   }
 }

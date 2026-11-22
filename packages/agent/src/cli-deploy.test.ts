@@ -29,8 +29,13 @@ function json(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 }
 
+const frame = (e: OperationEvent) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`;
+
 function sse(events: OperationEvent[], chunkSize = Infinity): Response {
-  const text = events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+  return rawSse(events.map(frame).join(''), chunkSize);
+}
+
+function rawSse(text: string, chunkSize = Infinity): Response {
   const enc = new TextEncoder();
   const bytes = enc.encode(text);
   const chunks: Uint8Array[] = [];
@@ -216,6 +221,41 @@ describe('runDeploy event stream', () => {
     expect(h.text()).toContain('users.email');
   });
 
+  it('ignores events with an unknown name and keeps reading', async () => {
+    const h = harness([
+      accepted(),
+      rawSse(`event: heartbeat\ndata: {"ts":1}\n\n${frame(done('succeeded'))}`),
+    ]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(0);
+  });
+
+  it('ignores SSE comment lines such as ": ping"', async () => {
+    const h = harness([accepted(), rawSse(`: ping\n\n${frame({ type: 'log', line: 'hello' })}: ping\n\n${frame(done('succeeded'))}`)]);
+    const code = await runDeploy(baseArgs, {}, h.deps);
+    expect(code).toBe(0);
+    expect(h.text()).toContain('hello');
+  });
+
+  it('ignores non-JSON data on an unknown event', async () => {
+    const h = harness([accepted(), rawSse(`event: heartbeat\ndata: not json\n\n${frame(done('succeeded'))}`)]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(0);
+  });
+
+  it('prints the message of a failed done event whose code is null', async () => {
+    const h = harness([accepted(), sse([done('failed', null, 'agent crashed unexpectedly')])]);
+    const code = await runDeploy(baseArgs, {}, h.deps);
+    expect(code).toBe(1);
+    expect(h.text()).toContain('agent crashed unexpectedly');
+  });
+
+  it('returns 3 with a line naming the operation when the stream closes before done', async () => {
+    const h = harness([accepted('op-77'), sse([{ type: 'step', step: 'pull', status: 'running' }])]);
+    const code = await runDeploy(baseArgs, {}, h.deps);
+    expect(code).toBe(3);
+    expect(h.text()).toContain('op-77');
+    expect(h.text()).not.toContain(i18n('en').t('cli.unreachable'));
+  });
+
   it.each(REJECT_CODES)('returns 2 for a done event with reject code %s', async (rejectCode) => {
     const h = harness([accepted(), sse([done('rejected', rejectCode, 'x')])]);
     expect(await runDeploy(baseArgs, {}, h.deps)).toBe(2);
@@ -230,6 +270,22 @@ describe('runDeploy server answers', () => {
     expect(code).toBe(2);
     expect(h.text()).toContain(`COMMIT_BLOCKED: ${message}`);
     expect(h.text()).toContain('bbbbbbb');
+  });
+
+  it.each([
+    [400, 'INVALID_REQUEST'],
+    [403, 'BRANCH_MISMATCH'],
+    [409, 'COMMIT_EXPIRED'],
+  ] as const)('returns 2 for a %i response carrying reject code %s', async (status, code) => {
+    const h = harness([json(status, { code, message: 'rejected by policy', params: {} })]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(2);
+    expect(h.text()).toContain(`${code}: rejected by policy`);
+  });
+
+  it('returns 1 for a 422 whose code is not a reject code', async () => {
+    const h = harness([json(422, { code: 'IMAGE_PULL_FAILED', message: 'pull failed', params: {} })]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(1);
+    expect(h.text()).toContain('IMAGE_PULL_FAILED: pull failed');
   });
 
   it('returns 0 on a 200 ALREADY_ACTIVE without opening a stream', async () => {
