@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsup src/main.ts --format esm --target node26 --clean --no-external @microrun/core --no-external microrun",
+    "build": "tsup",
     "postbuild": "node -e \"const fs=require('node:fs');fs.mkdirSync('dist/public',{recursive:true});fs.cpSync(require.resolve('htmx.org/dist/htmx.min.js'),'dist/public/htmx.min.js');fs.cpSync('src/public/app.css','dist/public/app.css')\"",
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1175.0",
+    "@aws-sdk/lib-storage": "^3.1175.0",
     "@fastify/cookie": "^11.1.5",
     "@fastify/formbody": "^9.0.2",
     "@fastify/rate-limit": "^11.3.0",
@@ -18,6 +20,7 @@
     "fastify": "^5.12.8",
     "htmx.org": "^2.0.11",
     "knex": "^3.3.0",
+    "ws": "^8.23.0",
     "zod": "^4.6.7"
   },
   "devDependencies": {
