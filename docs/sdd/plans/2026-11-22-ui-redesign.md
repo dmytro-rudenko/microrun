@@ -63,7 +63,7 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
 - "`GET /` для 100 оточень не викликає `repo.listReleases`; `GET /feed?before=garbage` → 400; `GET /?q=<sha-prefix>` повертає рядок цього релізу; `GET /env/unknown/older` → 404."
 - "E2E: відкат з головної через `rel-production-aaaaaaa` проходить; `col-production` замінено на `env-link-production`."
 
-- [ ] **Step 1: write `packages/server/src/db/repo-feed.test.ts`** — setup copied from `db/repo.test.ts:9-75` (`openDb(':memory:')`, `new Repo(db)`, `mkServer`, `mkEnv`, `newRelease`, `newOperation`; import them by copying, they are not exported). Tests:
+- [x] **Step 1: write `packages/server/src/db/repo-feed.test.ts`** — setup copied from `db/repo.test.ts:9-75` (`openDb(':memory:')`, `new Repo(db)`, `mkServer`, `mkEnv`, `newRelease`, `newOperation`; import them by copying, they are not exported). Tests:
   ```ts
   it('creates the scale indexes', async () => {
     const names = (await db.raw("select name from sqlite_master where type = 'index'")).map((r: { name: string }) => r.name);
@@ -103,7 +103,7 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
   });
   ```
   Seed releases via `repo.insertRelease({...newRelease(envId, sha40, k === 0 ? 'active' : 'available'), deployedAt })`; commit SHAs `k.toString(16).padStart(8, '0') + env letter repeated to 40 chars` so prefixes are unique. Operations via `repo.createOperation` + `repo.updateOperation(id, { status: 'succeeded', finishedAt })`.
-- [ ] **Step 2: write `packages/server/src/ui/home.test.ts`** — imports `homeView`, `envDot`, types `HomeVM`, `FeedRowVM`, `IndexEnvVM` from `./home.ts`, `envView` from `./env.ts`, `i18n`, `LANGS` from `@microrun/core/i18n`. Helpers: `NOW = Date.UTC(2026, 10, 22, 12)`; `row(k)` builds a `FeedRowVM` (`id: 'r'+k`, `envId: 'e'+(k%100)`, `envName: 'env-'+(k%100)`, `isProduction: k%100 < 10`, `sha: k.toString(16).padStart(40,'0')`, `message: 'msg '+k`, `author: 'dev'`, `deployedAt: NOW - k*60_000`, `state: 'available'`, `schemaChange: false`). Tests:
+- [x] **Step 2: write `packages/server/src/ui/home.test.ts`** — imports `homeView`, `envDot`, types `HomeVM`, `FeedRowVM`, `IndexEnvVM` from `./home.ts`, `envView` from `./env.ts`, `i18n`, `LANGS` from `@microrun/core/i18n`. Helpers: `NOW = Date.UTC(2026, 10, 22, 12)`; `row(k)` builds a `FeedRowVM` (`id: 'r'+k`, `envId: 'e'+(k%100)`, `envName: 'env-'+(k%100)`, `isProduction: k%100 < 10`, `sha: k.toString(16).padStart(40,'0')`, `message: 'msg '+k`, `author: 'dev'`, `deployedAt: NOW - k*60_000`, `state: 'available'`, `schemaChange: false`). Tests:
   ```ts
   const vm: HomeVM = { q: '', only: 'all', feed: Array.from({ length: 25 }, (_, k) => row(k)), rest: 975, next: `${NOW - 24 * 60_000}.r24`,
     envs: Array.from({ length: 100 }, (_, k) => ({ id: 'e'+k, name: 'env-'+k, isProduction: k % 10 === 0, dot: 'ok' })) };
@@ -140,7 +140,7 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
   expect(top(outB)).toContain(`rel-x-${failed.sha.slice(0,7)}`); expect(top(outB)).not.toContain(`rel-x-${oldBlocked.sha.slice(0,7)}`);
   ```
   where `top(out)` slices from `data-testid="env-in-window"` to `data-testid="env-older"`.
-- [ ] **Step 3: write `packages/server/src/app-home.test.ts`** — build the app exactly like `app-c.test.ts:58-81` (`build(config)`), login like `app-c.test.ts:104`. Seed 100 envs with `repo.saveEnv` (positions 0..99, every 10th production, unique branches `b-<k>`) and 10 releases each with `repo.insertRelease`. Tests:
+- [x] **Step 3: write `packages/server/src/app-home.test.ts`** — build the app exactly like `app-c.test.ts:58-81` (`build(config)`), login like `app-c.test.ts:104`. Seed 100 envs with `repo.saveEnv` (positions 0..99, every 10th production, unique branches `b-<k>`) and 10 releases each with `repo.insertRelease`. Tests:
   ```ts
   const spy = vi.spyOn(repo, 'listReleases');
   const res = await get('/');
@@ -158,8 +158,8 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
   expect(older.body.match(/data-testid="rel-/g)).toHaveLength(20);
   ```
   `nextFrom(body)` extracts the `before=` value from `hx-get="/feed?before=…"`.
-- [ ] **Step 4: edit `e2e/acceptance.spec.ts:196`** — `'[data-testid=col-production] a[href^="/env/"]'` → `'[data-testid=env-link-production]'` and read its `href`.
-- [ ] **Step 5: run them, watch them fail** — `pnpm vitest run packages/server/src/ui/home.test.ts packages/server/src/db/repo-feed.test.ts packages/server/src/app-home.test.ts`, expect failures: `Failed to resolve import "./home.ts"` and `repo.listRecentReleases is not a function`.
+- [x] **Step 4: edit `e2e/acceptance.spec.ts:196`** — `'[data-testid=col-production] a[href^="/env/"]'` → `'[data-testid=env-link-production]'` and read its `href`.
+- [x] **Step 5: run them, watch them fail** — `pnpm vitest run packages/server/src/ui/home.test.ts packages/server/src/db/repo-feed.test.ts packages/server/src/app-home.test.ts`, expect failures: `Failed to resolve import "./home.ts"` and `repo.listRecentReleases is not a function`.
 
 ---
 
