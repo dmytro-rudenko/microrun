@@ -182,37 +182,36 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
 
 const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 
-export function serversView(
+export type ServerOption = { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string };
+
+export function serverBlock(
   i: I18n,
-  servers: { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string }[],
-  envs: { id: string; name: string }[],
-  csrf: string,
-  created?: { name: string; token: string; command: string },
-  error?: string,
+  p: {
+    servers: ServerOption[];
+    selected: string;
+    usedBy: string[];
+    csrf: string;
+    created?: { name: string; token: string; command: string };
+    error?: string;
+  },
 ): Html {
-  const token = html`<input type="hidden" name="_csrf" value="${csrf}">`;
-  const proxyForm = (s: (typeof servers)[number]) =>
-    html`<form method="post" action="/settings/servers/${s.id}/proxy">${token}${dropdown('proxy_mode', s.proxyMode, PROXY_MODES.map((m) => ({ value: m, label: m })), html` aria-label="${i.t('settings.servers.proxy')}" onchange="this.form.submit()"`)}</form>`;
-  const row = (s: (typeof servers)[number]) => html`<tr data-testid="server-row-${s.name}" data-status="${s.online ? 'online' : 'offline'}">
-<td>${s.name}</td><td>${tr(i, s.online ? 'agent.online' : 'agent.offline')}${s.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</td>
-<td>${s.agentVersion ?? '—'}</td><td>${proxyForm(s)}</td>
-<td>${s.builtin ? '' : html`<form method="post" action="/settings/servers/${s.id}/token">${token}<button type="submit">${tr(i, 'settings.servers.reissue')}</button></form>`}</td></tr>`;
-  return html`<h1>${tr(i, 'settings.servers.title')}</h1>
-${created
-  ? html`<div class="alert ok" role="status"><p>${tr(i, 'settings.servers.created', { name: created.name })}</p>
-<code data-testid="agent-token">${created.token}</code>
-<p>${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command">${created.command}</pre></div>`
-  : ''}
-${error ? html`<div class="alert" role="alert" data-testid="server-error">${error}</div>` : ''}
-<form method="post" action="/settings/servers" class="row">${token}
-<label>${tr(i, 'settings.servers.name')}<input name="name" data-testid="server-name" required></label>
-<label>${tr(i, 'settings.servers.proxy')}<select name="proxy_mode">${PROXY_MODES.map((m) => html`<option value="${m}">${m}</option>`)}</select></label>
-<button type="submit" data-testid="server-create">${tr(i, 'settings.servers.create')}</button></form>
-<table><thead><tr><th>${tr(i, 'settings.servers.colName')}</th><th>${tr(i, 'settings.servers.colStatus')}</th><th>${tr(i, 'settings.servers.colVersion')}</th><th>${tr(i, 'settings.servers.proxy')}</th><th></th></tr></thead>
-<tbody>${servers.map(row)}</tbody></table>
-<h2>${tr(i, 'nav.envs')}</h2>
-<ul>${envs.map((e) => html`<li><a href="/settings/env/${e.id}" data-testid="env-link-${e.name}">${e.name}</a></li>`)}</ul>
-<a href="/settings/env/new" data-testid="env-new">${tr(i, 'settings.env.newTitle')}</a>`;
+  const cur = p.servers.find((s) => s.id === p.selected) ?? p.servers[0]!;
+  const hdr = JSON.stringify({ 'x-csrf-token': p.csrf });
+  const created = p.created;
+  return html`<div id="srv" class="srv" data-testid="server-block">
+<select name="server_id" aria-label="${i.t('settings.f.server_id')}" hx-get="/settings/servers/block" hx-target="#srv" hx-swap="outerHTML">
+${p.servers.map((s) => html`<option value="${s.id}"${s.id === cur.id ? ' selected' : ''}>${s.name}</option>`)}
+</select>
+<div class="srv-meta"><span data-testid="agent-status" data-status="${cur.online ? 'online' : 'offline'}">${tr(i, cur.online ? 'agent.online' : 'agent.offline')}${cur.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</span>
+<span>${cur.agentVersion ?? '—'}</span>
+<label>${tr(i, 'settings.servers.proxy')} ${dropdown('proxy_mode', cur.proxyMode, PROXY_MODES.map((m) => ({ value: m, label: m })), html` hx-post="/settings/servers/${cur.id}/proxy" hx-trigger="change" hx-params="proxy_mode" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`)}</label>
+${cur.builtin ? '' : html`<button type="button" data-testid="server-reissue" hx-post="/settings/servers/${cur.id}/token" hx-params="none" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'settings.servers.reissue')}</button>`}
+${p.usedBy.length ? html`<span class="small" data-testid="server-used-by">${tr(i, 'srv.usedBy', { list: p.usedBy.join(', ') })}</span>` : ''}</div>
+${created ? html`<div class="alert ok" role="status"><p>${tr(i, 'settings.servers.created', { name: created.name })}</p><code data-testid="agent-token">${created.token}</code><p>${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command">${created.command}</pre></div>` : ''}
+${p.error ? html`<div class="alert" role="alert" data-testid="server-error">${p.error}</div>` : ''}
+<div class="srv-new"><label>${tr(i, 'srv.add')} <input type="text" name="server_name" data-testid="server-name" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('#srv').querySelector('[data-testid=server-create]').click()}"></label>
+<button type="button" data-testid="server-create" hx-post="/settings/servers" hx-include="#srv [name=server_name]" hx-params="server_name" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'srv.createPick')}</button></div>
+</div>`;
 }
 
 interface Option {
@@ -242,9 +241,9 @@ const bindResult = (bind: BindResult) =>
   html`<div class="alert${bind.ok ? ' ok' : ''}" data-testid="bind-result" data-ok="${bind.ok ? 'true' : 'false'}">${bind.text}</div>`;
 
 const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: BindResult | undefined) =>
-  html`<form method="post" action="/settings/env/${id}/bind">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
+  html`<form method="post" action="/settings/env/${id}/bind#settings">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
 ${bind ? bindResult(bind) : ''}
-<form method="post" action="/settings/env/${id}/token">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`;
+<form method="post" action="/settings/env/${id}/token#settings">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`;
 
 const deployTokenBlock = (i: I18n, token: string) =>
   html`<div class="alert ok" role="status"><p>${tr(i, 'settings.env.tokenShown')}</p><code data-testid="deploy-token">${token}</code></div>`;
@@ -253,7 +252,7 @@ export function envFormView(
   i: I18n,
   p: {
     values: EnvFormValues;
-    servers: { id: string; name: string }[];
+    serverBlock: Html;
     errors: Record<string, string>;
     csrf: string;
     isNew: boolean;
@@ -274,15 +273,14 @@ export function envFormView(
   const group = (k: (typeof STORAGE_KINDS)[number], body: Html) =>
     html`<div class="kind" data-kind="${k}"${k === kind ? '' : ' hidden'}>${body}</div>`;
 
-  return html`<h1>${tr(i, p.isNew ? 'settings.env.newTitle' : 'settings.env.editTitle')}</h1>
-${errorsBlock(i, p.errors)}
+  return html`${errorsBlock(i, p.errors)}
 ${p.rollingHint ? html`<div class="alert w" role="status" data-testid="rolling-hint">${tr(i, 'settings.env.rollingHint')}</div>` : ''}
-<form method="post" action="/settings/env" class="envform">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
+<form method="post" action="/settings/env#settings" class="envform">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
 <fieldset><legend>${tr(i, 'settings.sec.general')}</legend>
 ${field('name', entry('name', v('name')))}
 ${field('branch', entry('branch', v('branch')))}
 ${field('is_production', checkbox('is_production', isProduction))}
-${field('server_id', dropdown('server_id', v('server_id'), p.servers.map((s) => ({ value: s.id, label: s.name }))))}
+<div class="f"><span>${label('server_id')}</span>${p.serverBlock}</div>
 ${field('position', entry('position', v('position'), 'number'))}
 </fieldset>
 <fieldset><legend>${tr(i, 'settings.sec.compose')}</legend>

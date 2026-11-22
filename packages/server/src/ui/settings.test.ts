@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
-import { envFormView, parseEnvForm, serversView, type EnvFormValues } from './settings.ts';
+import { envFormView, parseEnvForm, serverBlock, type EnvFormValues } from './settings.ts';
+import { html } from './html.ts';
 import { loginView } from './login.ts';
 
 const EVIL = '<img src=x onerror=alert(1)>';
@@ -374,7 +375,7 @@ describe('loginView', () => {
   });
 });
 
-describe('serversView', () => {
+describe('serverBlock', () => {
   const en = i18n('en');
   const servers = [
     { id: 's1', name: 'local', online: true, builtin: true, agentVersion: '1.2.0', proxyMode: 'external' },
@@ -385,85 +386,176 @@ describe('serversView', () => {
     token: 'tok_abc123',
     command: 'npm i -g microrun && MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
   };
-  const envs = [{ id: 'env-1', name: 'production' }, { id: 'env-2', name: 'staging' }];
+  const block = (over: Partial<Parameters<typeof serverBlock>[1]> = {}, i = en) =>
+    serverBlock(i, { servers, selected: 's2', usedBy: [], csrf: 'csrf-1', ...over }).__html;
+  const optionTag = (out: string, id: string) => new RegExp(`<option[^>]*value="${id}"[^>]*>`).exec(out)?.[0];
+  const serverSelect = (out: string) => /<select[^>]*\bname="server_id"[^>]*>/.exec(out)?.[0];
+  const proxySelect = (out: string) => /<select[^>]*\bname="proxy_mode"[^>]*>/.exec(out)?.[0];
+  const hdr = '{&quot;x-csrf-token&quot;:&quot;csrf-1&quot;}';
 
-  test('lists environments with links to their settings and a link to create one', () => {
-    const out = serversView(en, servers, envs, 'csrf-1').__html;
-    expect(tagOf(out, 'env-link-production')).toContain('href="/settings/env/env-1"');
-    expect(tagOf(out, 'env-link-staging')).toContain('href="/settings/env/env-2"');
-    expect(tagOf(out, 'env-new')).toContain('href="/settings/env/new"');
+  test('is a #srv container with the server-block test id', () => {
+    expect(tagOf(block(), 'server-block')).toContain('id="srv"');
+  });
+
+  test('lists every server and marks only the selected one', () => {
+    const out = block({ selected: 's2' });
+    expect(hasAttr(optionTag(out, 's2')!, 'selected')).toBe(true);
+    expect(hasAttr(optionTag(out, 's1')!, 'selected')).toBe(false);
+  });
+
+  test('falls back to the first server when the selected id is unknown', () => {
+    const out = block({ selected: 'gone' });
+    expect(hasAttr(optionTag(out, 's1')!, 'selected')).toBe(true);
+    expect(hasAttr(optionTag(out, 's2')!, 'selected')).toBe(false);
+    expect(tagOf(out, 'agent-status')).toMatch(/data-status="online"/);
+  });
+
+  test('the server select reloads the block through hx-get', () => {
+    const tag = serverSelect(block())!;
+    expect(tag).toContain('hx-get="/settings/servers/block"');
+    expect(tag).toContain('hx-target="#srv"');
+    expect(tag).toContain('hx-swap="outerHTML"');
+  });
+
+  test('agent-status shows offline for an offline server', () => {
+    const out = block({ selected: 's2' });
+    expect(tagOf(out, 'agent-status')).toMatch(/data-status="offline"/);
+    expect(textOf(out, 'agent-status')).toContain(en.t('agent.offline'));
+  });
+
+  test('agent-status shows online for an online server', () => {
+    const out = block({ selected: 's1' });
+    expect(tagOf(out, 'agent-status')).toMatch(/data-status="online"/);
+    expect(textOf(out, 'agent-status')).toContain(en.t('agent.online'));
+  });
+
+  test('shows the agent version of the selected server and a dash when there is none', () => {
+    expect(block({ selected: 's1' })).toContain('1.2.0');
+    const out = block({ selected: 's2' });
+    expect(out).toContain('—');
+    expect(out).not.toContain('null');
+    expect(out).not.toContain('1.2.0');
+  });
+
+  test('the builtin server has no reissue button', () => {
+    expect(tagOf(block({ selected: 's1' }), 'server-reissue')).toBeUndefined();
+  });
+
+  test('a remote server has a reissue button posting to its own token route', () => {
+    const tag = tagOf(block({ selected: 's2' }), 'server-reissue')!;
+    expect(tag).toBeDefined();
+    expect(tag).toContain('hx-post="/settings/servers/s2/token"');
+    expect(tag).toContain('hx-params="none"');
+    expect(tag).toContain('hx-target="#srv"');
+  });
+
+  test('the proxy select posts to the selected server and selects its current mode', () => {
+    const out = block({ selected: 's2' });
+    const tag = proxySelect(out)!;
+    expect(tag).toContain('hx-post="/settings/servers/s2/proxy"');
+    expect(tag).toContain('hx-trigger="change"');
+    expect(tag).toContain('hx-params="proxy_mode"');
+    expect(tag).toContain('hx-target="#srv"');
+    expect(hasAttr(optionTag(out, 'bundled')!, 'selected')).toBe(true);
+    expect(hasAttr(optionTag(out, 'external')!, 'selected')).toBe(false);
+  });
+
+  test('the builtin server also has a proxy select', () => {
+    expect(proxySelect(block({ selected: 's1' }))).toContain('hx-post="/settings/servers/s1/proxy"');
+  });
+
+  test('mutating requests carry the csrf token in hx-headers', () => {
+    const out = block({ selected: 's2' });
+    expect(proxySelect(out)).toContain(`hx-headers="${hdr}"`);
+    expect(tagOf(out, 'server-reissue')).toContain(`hx-headers="${hdr}"`);
+    expect(tagOf(out, 'server-create')).toContain(`hx-headers="${hdr}"`);
+  });
+
+  test('server-used-by lists the environments using the server', () => {
+    expect(textOf(block({ usedBy: ['prod', 'stage'] }), 'server-used-by')).toContain('prod, stage');
+  });
+
+  test('server-used-by is absent when no environment uses the server', () => {
+    expect(tagOf(block({ usedBy: [] }), 'server-used-by')).toBeUndefined();
   });
 
   test('shows the new agent token and install command when a server was just created', () => {
-    const out = serversView(en, servers, [], 'csrf-1', created).__html;
+    const out = block({ created });
     expect(textOf(out, 'agent-token')).toContain('tok_abc123');
     expect(textOf(out, 'agent-command')).toContain(
       'npm i -g microrun &amp;&amp; MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
     );
+    expect(out).toContain('edge-2');
   });
 
   test('shows neither the token nor the command on a later render', () => {
-    const out = serversView(en, servers, [], 'csrf-1').__html;
+    const out = block();
     expect(tagOf(out, 'agent-token')).toBeUndefined();
     expect(tagOf(out, 'agent-command')).toBeUndefined();
     expect(out).not.toContain('tok_abc123');
   });
 
-  test('has the create form with name field, submit and csrf', () => {
-    const out = serversView(en, servers, [], 'csrf-1').__html;
-    expect(tagOf(out, 'server-name')).toBeDefined();
-    expect(tagOf(out, 'server-create')).toBeDefined();
-    expect(inputTag(out, '_csrf')).toContain('csrf-1');
+  test('shows server-error only when an error is passed', () => {
+    expect(tagOf(block(), 'server-error')).toBeUndefined();
+    const out = block({ error: 'name taken' });
+    expect(tagOf(out, 'server-error')).toMatch(/role="alert"/);
+    expect(textOf(out, 'server-error')).toContain('name taken');
   });
 
-  test('renders one row per server with data-status online or offline', () => {
-    const out = serversView(en, servers, [], 'csrf-1').__html;
-    expect(tagOf(out, 'server-row-local')).toMatch(/data-status="online"/);
-    expect(tagOf(out, 'server-row-edge')).toMatch(/data-status="offline"/);
-    expect(out.match(/data-testid="server-row-/g)).toHaveLength(2);
+  test('escapes the error text', () => {
+    const out = block({ error: EVIL });
+    expect(out).not.toContain('<img');
+    expect(out).toContain(EVIL_ESCAPED);
   });
 
-  test('shows the agent version and proxy mode without printing null', () => {
-    const out = serversView(en, servers, [], 'csrf-1').__html;
-    expect(out).toContain('1.2.0');
-    expect(out).toContain('bundled');
-    expect(out).not.toContain('null');
+  test('every button in the block is type="button" so it cannot submit the env form', () => {
+    const out = block({ selected: 's2', created, error: 'x', usedBy: ['prod'] });
+    const buttons = out.match(/<button\b[^>]*>/g) ?? [];
+    expect(buttons.length).toBeGreaterThanOrEqual(2);
+    for (const b of buttons) expect(b).toContain('type="button"');
   });
 
-  test('every server row, the builtin one included, has a proxy_mode form posting to its own proxy route', () => {
-    const out = serversView(en, servers, [], 'csrf-1').__html;
-    for (const s of servers) {
-      const row = out.slice(out.indexOf(`data-testid="server-row-${s.name}"`));
-      const formAt = row.indexOf(`<form method="post" action="/settings/servers/${s.id}/proxy"`);
-      expect(formAt, s.name).toBeGreaterThanOrEqual(0);
-      const form = row.slice(formAt, row.indexOf('</form>', formAt));
-      expect(form).toContain('name="_csrf" value="csrf-1"');
-      expect(form).toMatch(/<select name="proxy_mode"/);
-      expect(form).toMatch(new RegExp(`<option value="${s.proxyMode}"[^>]*selected`));
-      expect(form).toMatch(/<option value="external"/);
-      expect(form).toMatch(/<option value="bundled"/);
-    }
+  test('the create button posts server_name only', () => {
+    const tag = tagOf(block(), 'server-create')!;
+    expect(tag).toContain('hx-post="/settings/servers"');
+    expect(tag).toContain('hx-params="server_name"');
+    expect(tag).toContain('hx-include="#srv [name=server_name]"');
+    expect(tag).toContain('hx-target="#srv"');
+  });
+
+  test('the server_name input does not submit the env form on Enter', () => {
+    const tag = inputTag(block(), 'server_name')!;
+    expect(tag).toContain('data-testid="server-name"');
+    expect(tag).toContain('type="text"');
+    expect(tag).toContain('preventDefault');
+  });
+
+  test('contains no nested form, so it can sit inside the env form', () => {
+    expect(block({ created, error: 'x' })).not.toContain('<form');
   });
 
   test('escapes server names', () => {
-    const out = serversView(en, [{ ...servers[0]!, name: EVIL }], [], 'csrf-1').__html;
+    const out = block({ servers: [{ ...servers[0]!, name: EVIL }], selected: 's1' });
+    expect(out).not.toContain('<img');
+    expect(out).toContain(EVIL_ESCAPED);
+  });
+
+  test('escapes the used-by list', () => {
+    const out = block({ usedBy: [EVIL] });
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
 
   test.each(LANGS)('renders in %s without raw catalog keys', (lang) => {
-    const out = serversView(i18n(lang), servers, envs, 'csrf-1', created).__html;
-    expectNoRawKeys(lang, 'serversView', out);
-    if (lang !== 'en') expect(out).not.toBe(serversView(en, servers, [], 'csrf-1', created).__html);
+    const render = (l: Lang) => block({ created, error: 'x', usedBy: ['prod', 'stage'], selected: 's2' }, i18n(l));
+    expectNoRawKeys(lang, 'serverBlock', render(lang));
+    if (lang !== 'en') expect(render(lang)).not.toBe(render('en'));
   });
 });
 
 describe('envFormView', () => {
   const en = i18n('en');
-  const servers = [
-    { id: 'srv-1', name: 'local' },
-    { id: 'srv-2', name: 'edge' },
-  ];
+  const serverBlockHtml = html`<div id="srv"></div>`;
 
   function values(over: Record<string, string> = {}): EnvFormValues {
     return {
@@ -493,7 +585,7 @@ describe('envFormView', () => {
   }
 
   const view = (over: Partial<Parameters<typeof envFormView>[1]> = {}, v: Record<string, string> = {}) =>
-    envFormView(en, { values: values(v), servers, errors: {}, csrf: 'csrf-1', isNew: false, ...over }).__html;
+    envFormView(en, { values: values(v), serverBlock: serverBlockHtml, errors: {}, csrf: 'csrf-1', isNew: false, ...over }).__html;
 
   test('has a save button and the csrf token', () => {
     const out = view();
@@ -519,13 +611,25 @@ describe('envFormView', () => {
     expect(hasAttr(inputTag(view(), 'is_production')!, 'checked')).toBe(false);
   });
 
-  test('lists the servers and selects the current one', () => {
-    const out = view({}, { server_id: 'srv-2' });
-    const select = out.slice(out.indexOf('name="server_id"'));
-    const selected = /<option[^>]*value="srv-2"[^>]*>/.exec(select)![0];
-    const other = /<option[^>]*value="srv-1"[^>]*>/.exec(select)![0];
-    expect(hasAttr(selected, 'selected')).toBe(true);
-    expect(hasAttr(other, 'selected')).toBe(false);
+  test('embeds the server block passed in place of the server dropdown', () => {
+    const out = view();
+    expect(out).toContain('<div id="srv"></div>');
+    expect(out).not.toContain('name="server_id"');
+  });
+
+  test('has no page heading of its own', () => {
+    expect(view()).not.toContain('<h1');
+    expect(view({ isNew: true })).not.toContain('<h1');
+  });
+
+  test('the env form posts to /settings/env#settings', () => {
+    expect(view()).toContain('<form method="post" action="/settings/env#settings" class="envform">');
+  });
+
+  test('the bind and token actions post to their routes with the #settings anchor', () => {
+    const out = view({}, { id: 'env-1' });
+    expect(out).toContain('<form method="post" action="/settings/env/env-1/bind#settings">');
+    expect(out).toContain('<form method="post" action="/settings/env/env-1/token#settings">');
   });
 
   test.each([
@@ -541,7 +645,7 @@ describe('envFormView', () => {
   test('renders every plain form field by its name', () => {
     const out = view();
     for (const name of [
-      'name', 'branch', 'is_production', 'server_id', 'position', 'compose_project', 'compose_dir',
+      'name', 'branch', 'is_production', 'position', 'compose_project', 'compose_dir',
       'compose_files', 'compose_env_files', 'services', 'migration_service', 'db_kind', 'db_url_env', 'migration_tables',
       'expand_cmd', 'contract_cmd', 'cleanup_cmd', 'schema_check', 'health_timeout_s',
       'retention_value', 'retention_unit',
@@ -608,7 +712,7 @@ describe('envFormView', () => {
     const render = (l: Lang, kind: string) =>
       envFormView(i18n(l), {
         values: values({ storage_kind: kind }),
-        servers,
+        serverBlock: serverBlockHtml,
         errors: { name: 'x' },
         csrf: 'csrf-1',
         isNew: false,
