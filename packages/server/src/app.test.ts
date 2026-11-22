@@ -232,7 +232,9 @@ describe('API /api/v1', () => {
     const body = res.json();
     expect(body.code).toBe('COMMIT_BLOCKED');
     expect(body.message).toContain(B.slice(0, 7));
-    expect(body.message).toBe(i18n('uk').t('codes.COMMIT_BLOCKED', body.params));
+    expect(typeof body.params.at).toBe('number');
+    expect(body.message).toContain(i18n('uk').date(body.params.at));
+    expect(body.message).not.toMatch(/\d{4}-\d{2}-\d{2}T[\d:.]+Z/);
   });
 
   it('answers a wrong deploy token with 401 UNAUTHORIZED', async () => {

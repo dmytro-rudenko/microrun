@@ -69,7 +69,10 @@ function applyLabels(i: I18n) {
 
 export function cleanupView(i: I18n, r: ReleaseVM, csrf: string): Html {
   const rules = r.cleanupPreview;
-  if (!rules) return html``;
+  if (!rules)
+    return r.cleanupState === 'pending'
+      ? html`<div class="sect" data-testid="cleanup-pending" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="every 2s" hx-swap="innerHTML"><div class="small">${tr(i, 'cl.preparing')}</div></div>`
+      : html``;
   if (r.cleanupState === 'applied') {
     const applied = rules.flatMap((x) => {
       const res = r.cleanupResult?.find((y) => y.rule === x.rule);

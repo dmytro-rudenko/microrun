@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { i18n, negotiate, type I18n } from '@microrun/core/i18n';
+import { codeMessage, i18n, negotiate, type I18n } from '@microrun/core/i18n';
 import { deployRequest, type OperationEvent, type ResultCode } from '@microrun/core/protocol';
 import { finished, streamOperation, type AppDeps } from '../app.ts';
 import { hashToken } from '../crypto.ts';
@@ -15,7 +15,7 @@ export const statusFor = (code: ResultCode) =>
 
 const langOf = (req: FastifyRequest) => i18n(negotiate(undefined, req.headers['accept-language']));
 
-const message = (i: I18n, code: string | null, params: Params) => (code ? i.t(`codes.${code}`, params) : '');
+const message = (i: I18n, code: string | null, params: Params) => (code ? codeMessage(i, code, params) : '');
 
 function fail(req: FastifyRequest, reply: FastifyReply, code: ResultCode, params: Params = {}) {
   return reply.code(statusFor(code)).send({ code, message: message(langOf(req), code, params), params });

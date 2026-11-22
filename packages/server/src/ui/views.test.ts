@@ -84,7 +84,7 @@ const PLAIN_URLS = [
   'mongodb://h1,h2/db?replicaSet=rs',
 ];
 
-const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go'];
+const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go', 'cl.preparing'];
 
 function expectNoRawKeys(lang: Lang, view: string, out: string) {
   const keys = allKeys()[lang];
@@ -437,6 +437,29 @@ describe('cleanupView', () => {
     expect(out).not.toContain('cleanup-result');
   });
 
+  test('pending without a preview polls the panel of this release until the preview exists', () => {
+    const waiting = release({ id: 'r-blocked', sha: sha('3333333'), state: 'blocked', cleanupState: 'pending', cleanupPreview: null });
+    const out = cleanupView(i, waiting, 'csrf-token').__html;
+    const tag = tagOf(out, 'cleanup-pending');
+    expect(tag).toBeDefined();
+    expect(tag).toContain('hx-get="/panel/r-blocked"');
+    expect(tag).toContain('hx-target="#panel"');
+    expect(tag).toContain('hx-trigger="every 2s"');
+    expect(tag).toContain('hx-swap="innerHTML"');
+    expect(i.t('cl.preparing')).not.toBe('cl.preparing');
+    expect(out).toContain(i.t('cl.preparing'));
+    expect(out).not.toContain('data-testid="cleanup-apply"');
+    expect(tagOf(panelView(i, env('stage'), waiting, 'csrf-token', NOW).__html, 'cleanup-pending')).toContain('hx-get="/panel/r-blocked"');
+  });
+
+  test('pending with a preview renders the rules and stops polling', () => {
+    const out = cleanupView(i, pending, 'csrf-token').__html;
+    expect(out).toContain('data-testid="cleanup-rule-promo-notifications"');
+    expect(out).toContain('data-testid="cleanup-apply"');
+    expect(out).not.toContain('data-testid="cleanup-pending"');
+    expect(out).not.toContain('hx-trigger="every');
+  });
+
   test('a rule description with markup is escaped', () => {
     const r = release({ cleanupState: 'pending', cleanupPreview: [{ rule: 'x', description: EVIL, count: 1 }] });
     const out = cleanupView(i, r, 'csrf-token').__html;
@@ -697,6 +720,7 @@ describe('every view in every language', () => {
       ],
     }),
     release({ id: '6666666', sha: sha('6666666'), state: 'expired', windowLeftMs: null, windowPct: null }),
+    release({ id: 'bbbbbbb', sha: sha('bbbbbbb'), state: 'blocked', windowLeftMs: null, windowPct: null, cleanupState: 'pending', cleanupPreview: null }),
     failed('7777777', 'SCHEMA_DESTRUCTIVE', { col: 'users_email' }),
     failed('8888888', 'CONTRACT_FAILED', { sha: '8888888', env: 'prod' }),
     failed('9999999', 'STORAGE_FAILED'),

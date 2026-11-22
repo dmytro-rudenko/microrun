@@ -1,4 +1,4 @@
-import type { I18n } from '@microrun/core/i18n';
+import { codeMessage, type I18n } from '@microrun/core/i18n';
 
 export type Html = { __html: string };
 
@@ -29,7 +29,4 @@ export const raw = (s: string): Html => ({ __html: s });
 
 export const tr = (i: I18n, key: string, params?: Record<string, string | number>): Html => raw(i.t(key, params));
 
-export function codeText(i: I18n, code: string, params: Record<string, string | number> = {}): Html {
-  const p = typeof params.at === 'number' ? { ...params, at: i.date(params.at) } : params;
-  return tr(i, `codes.${code}`, p);
-}
+export const codeText = (i: I18n, code: string, params: Record<string, string | number> = {}): Html => raw(codeMessage(i, code, params));
