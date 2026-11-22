@@ -382,7 +382,8 @@ export async function dryRunExpand(
   const src = await resolveDb(db);
   const name = `microrun-dryrun-${p.opId}`;
   const present = new Set(objectNames(await rawSnapshot(src)));
-  const tables = p.migrationTables.filter((t) => present.has(t));
+  const effective = p.migrationTables.length ? p.migrationTables : DEFAULT_MIGRATION_TABLES;
+  const tables = effective.filter((t) => present.has(t));
   const redact = secrets(src.url);
   try {
     const tmp = src.kind === 'postgres' ? await preparePostgres(src, name, tables)
@@ -394,7 +395,7 @@ export async function dryRunExpand(
     });
     const log = scrub([r.stdout, r.log].filter(Boolean).join('\n'), redact);
     if (r.exitCode !== 0) throw new AgentError('MIGRATION_FAILED', { exitCode: r.exitCode, log: log.slice(-LOG_TAIL) });
-    return { snapshot: excluding(await rawSnapshot(tmp), p.migrationTables), log };
+    return { snapshot: excluding(await rawSnapshot(tmp), effective), log };
   } finally {
     await docker(['rm', '-f', '-v', name]);
     if (src.kind === 'sqlite') {

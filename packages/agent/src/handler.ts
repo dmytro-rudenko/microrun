@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { readdir, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
@@ -119,6 +119,7 @@ async function pullImages(run: DockerRun, refs: string[]): Promise<Record<string
 }
 
 export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?: Partial<Layers> }): Handler {
+  mkdirSync(d.stateDir, { recursive: true });
   const L: Layers = { ...defaults, ...d.layers };
   const run = d.docker ?? docker;
   const resultsFile = join(d.stateDir, 'results.json');

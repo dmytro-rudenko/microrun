@@ -325,6 +325,16 @@ describe.each(engines)('database layer on $kind', (e) => {
     expect(await dryrunContainers(opId)).toEqual([]);
   });
 
+  it.runIf(e.kind === 'postgres')('copies the default migration tables when migrationTables is empty', async () => {
+    const { dryRunExpand } = await lib();
+    const opId = op('defaults');
+    const r = await dryRunExpand(ref, {
+      image: e.appImage, cmd: e.addCmd, migrationTables: [], opId, env: { NEW_COL: 'nickname' },
+    });
+    expect(diffSchema(base, r.snapshot)).toEqual([{ ...e.addDiff, detail: expect.any(String) }]);
+    expect(await dryrunContainers(opId)).toEqual([]);
+  });
+
   it('dry-runs an expand dropping a column as drop and the real db keeps it', async () => {
     const { dryRunExpand, snapshotSchema } = await lib();
     const opId = op('drop');

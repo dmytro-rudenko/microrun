@@ -102,6 +102,20 @@ describe('createHandler idempotency cache', () => {
     expect(again).toEqual(envResult);
   });
 
+  it('creates a missing stateDir before writing dirs.json and results.json', async () => {
+    const stateDir = join(tmp(), 'nested', 'agent');
+    const handler = createHandler({
+      stateDir,
+      docker: fakeDocker().run,
+      layers: { inspectEnv: async () => envResult, deleteImages: async () => {} },
+    });
+    await expect(handler(key('i'), inspectCmd())).resolves.toEqual(envResult);
+    await expect(handler(key('del'), { type: 'deleteImages', storage: { kind: 'local', path: '/var/microrun' }, env: 'prod', sha: 'abc1234', images: {} }))
+      .resolves.toEqual({});
+    expect(existsSync(join(stateDir, 'dirs.json'))).toBe(true);
+    expect(existsSync(join(stateDir, 'results.json'))).toBe(true);
+  });
+
   it('does not cache an error', async () => {
     const stateDir = tmp();
     let calls = 0;
