@@ -199,7 +199,7 @@ export class Scheduler {
           },
         );
         for (const m of res.markers) {
-          if (m.marker && m.marker.envId !== env.id) found.push({ svc: m.service, other: m.marker.envName });
+          if (m.marker && m.marker.envId !== env.dbMarkerId) found.push({ svc: m.service, other: m.marker.envName });
         }
       } catch (e) {
         this.log(`scheduler: env ${env.name}: marker ${svc.name}: ${message(e)}`);

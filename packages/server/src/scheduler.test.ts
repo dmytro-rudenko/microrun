@@ -340,14 +340,15 @@ describe('Scheduler', () => {
 
   it('fills the marker warning map on a mismatch, re-reading every markerEveryMs', async () => {
     const env = await mkEnv('staging', { services: ['web', 'worker'] });
+    await repo.setEnvMarker(env.id, 'mk-staging');
     let foreign = true;
     agent.handlers.readMarker = (cmd) => {
       const c = cmd as Extract<Command, { type: 'readMarker' }>;
       const all = [
-        { service: 'web', marker: { envId: env.id, envName: 'staging' } },
+        { service: 'web', marker: { envId: 'mk-staging', envName: 'staging' } },
         {
           service: 'worker',
-          marker: foreign ? { envId: 'prod-id', envName: 'production' } : { envId: env.id, envName: 'staging' },
+          marker: foreign ? { envId: 'prod-id', envName: 'production' } : { envId: 'mk-staging', envName: 'staging' },
         },
       ];
       return { markers: c.viaService ? all.filter((m) => m.service === c.viaService) : all };
@@ -371,5 +372,35 @@ describe('Scheduler', () => {
     now = T0 + 600_000;
     await scheduler.tick();
     expect(scheduler.markerWarnings().get(env.id) ?? []).toEqual([]);
+  });
+
+  it('compares markers with the bound marker id and warns an unbound env on any marker', async () => {
+    const bound = await mkEnv('production', { services: ['web', 'worker'] });
+    await repo.setEnvMarker(bound.id, 'mk-123');
+    const unbound = await mkEnv('preview', { services: ['web'] });
+    const reported: Record<string, Record<string, { envId: string; envName: string }>> = {
+      'proj-production': {
+        web: { envId: 'mk-123', envName: 'production' },
+        worker: { envId: 'mk-other', envName: 'stage' },
+      },
+      'proj-preview': { web: { envId: 'mk-123', envName: 'production' } },
+    };
+    agent.handlers.readMarker = (cmd) => {
+      const c = cmd as Extract<Command, { type: 'readMarker' }>;
+      const byService = reported[c.db.compose.project] ?? {};
+      return {
+        markers: Object.entries(byService)
+          .filter(([svc]) => !c.viaService || svc === c.viaService)
+          .map(([service, marker]) => ({ service, marker })),
+      };
+    };
+
+    await scheduler.tick();
+    expect(scheduler.markerWarnings().get(bound.id)).toEqual([
+      expect.objectContaining({ svc: 'worker', other: 'stage' }),
+    ]);
+    expect(scheduler.markerWarnings().get(unbound.id)).toEqual([
+      expect.objectContaining({ svc: 'web', other: 'production' }),
+    ]);
   });
 });
