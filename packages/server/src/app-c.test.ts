@@ -63,7 +63,7 @@ async function build(config: Config): Promise<FastifyInstance> {
   hub.attachLocal(serverId, agent);
   const envId = (await repo.saveEnv({
     name: 'production', branch: 'main', isProduction: true, position: 0, serverId,
-    composeProject: 'shop', composeDir: '/srv/shop', composeFiles: ['docker-compose.yml'],
+    composeProject: 'shop', composeDir: '/srv/shop', composeFiles: ['docker-compose.yml'], composeEnvFiles: [],
     services: [{ name: 'web', strategy: 'rolling', domain: 'shop.example.com', port: 3000 }],
     migrationService: 'web', dbKind: 'postgres', dbUrlEnv: 'DATABASE_URL', migrationTables: ['knex_migrations'],
     expandCmd: 'npm run migrate', contractCmd: null, cleanupCmd: null, schemaCheck: 'dry_run', healthTimeoutS: 90,

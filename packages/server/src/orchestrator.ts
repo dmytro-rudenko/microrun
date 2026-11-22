@@ -28,7 +28,7 @@ import type {
   StorageConfig,
 } from '@microrun/core/protocol';
 import { codePlain, i18n } from '@microrun/core/i18n';
-import { BusyError } from './db/repo.ts';
+import { BusyError, composeRefOf as compose } from './db/repo.ts';
 import type { EnvRow, OperationRow, OperationStatus, ReleaseRow, Repo } from './db/repo.ts';
 
 export interface OrchestratorDeps {
@@ -66,7 +66,6 @@ const iso = (ts: number) => new Date(ts).toISOString();
 const sha7 = (sha: string) => sha.slice(0, 7);
 const imageOf = (i: { ref: string; digest: string }) => (!i.digest ? i.ref : i.digest.includes('@') ? i.digest : `${i.ref}@${i.digest}`);
 const refs = (images: Images) => Object.fromEntries(Object.entries(images).map(([s, i]) => [s, i.ref]));
-const compose = (env: EnvRow): ComposeRef => ({ project: env.composeProject, dir: env.composeDir, files: env.composeFiles });
 const dbRef = (env: EnvRow, service: string): DbRef => ({ compose: compose(env), service, dbKind: env.dbKind, dbUrlEnv: env.dbUrlEnv });
 const drops = (d: DiffEntry[]) => d.filter((e) => e.kind === 'drop');
 const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -523,7 +522,8 @@ export class Orchestrator {
       return { stored: true };
     } catch (e) {
       const params = e instanceof AgentError ? e.params : {};
-      await this.log(op.id, `STORAGE_FAILED: ${message('STORAGE_FAILED', params)}`);
+      const detail = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(' ');
+      await this.log(op.id, `STORAGE_FAILED: ${message('STORAGE_FAILED', params)}${detail ? ` (${detail})` : ''}`);
       await this.repo.patchReleases([{ id: rel.id, patch: { stored: false } }]);
       return { stored: false };
     }

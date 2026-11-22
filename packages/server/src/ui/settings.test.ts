@@ -73,6 +73,7 @@ describe('parseEnvForm', () => {
       composeProject: 'shop',
       composeDir: '/srv/shop',
       composeFiles: ['docker-compose.yml'],
+      composeEnvFiles: [],
       services: [
         { name: 'web', strategy: 'rolling', domain: 'shop.example.com', port: 3000 },
         { name: 'worker', strategy: 'recreate' },
@@ -180,9 +181,11 @@ describe('parseEnvForm', () => {
     test('textareas split one entry per line and drop blanks', () => {
       const value = parsed({
         compose_files: 'docker-compose.yml\r\ndocker-compose.prod.yml\n\n',
+        compose_env_files: '/etc/shop/.env\n\nprod.env\r\n',
         migration_tables: '_migrations\nschema_history',
       });
       expect(value.composeFiles).toEqual(['docker-compose.yml', 'docker-compose.prod.yml']);
+      expect(value.composeEnvFiles).toEqual(['/etc/shop/.env', 'prod.env']);
       expect(value.migrationTables).toEqual(['_migrations', 'schema_history']);
     });
 
@@ -597,7 +600,7 @@ describe('envFormView', () => {
     const out = view();
     for (const name of [
       'name', 'branch', 'is_production', 'server_id', 'position', 'compose_project', 'compose_dir',
-      'compose_files', 'services', 'migration_service', 'db_kind', 'db_url_env', 'migration_tables',
+      'compose_files', 'compose_env_files', 'services', 'migration_service', 'db_kind', 'db_url_env', 'migration_tables',
       'expand_cmd', 'contract_cmd', 'cleanup_cmd', 'schema_check', 'health_timeout_s',
       'retention_value', 'retention_unit',
     ]) {

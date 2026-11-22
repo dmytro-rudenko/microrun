@@ -131,6 +131,7 @@ function envInput(): EnvInput {
     composeProject: 'shop',
     composeDir: '/srv/shop',
     composeFiles: ['docker-compose.yml'],
+    composeEnvFiles: [],
     services: [
       { name: 'web', strategy: 'rolling', domain: 'shop.example.com', port: 3000 },
       { name: 'worker', strategy: 'recreate' },
@@ -486,6 +487,7 @@ describe('Orchestrator deploy', () => {
     const op = await deploy(A);
     expect(op.status).toBe('succeeded');
     expect(op.log).toContain('STORAGE_FAILED');
+    expect(op.log).toContain('(reason=disk full)');
     expect(await rel(A)).toMatchObject({ state: 'active', stored: false });
   });
 });

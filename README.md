@@ -99,6 +99,8 @@ the containers of its own host. It needs:
 
 - the compose project directories (an environment's `compose_dir`) mounted into the container
   **at the same path**: `-v /srv/shop:/srv/shop`;
+- the environment's Compose env files (passed as `--env-file`) and the `env_file:` paths of its
+  services, when they live outside `compose_dir`, mounted the same way: `-v /etc/shop:/etc/shop:ro`;
 - for private registries, `-v ~/.docker/config.json:/root/.docker/config.json:ro`;
 - for local release storage, the `storage_path` directory mounted the same way.
 
@@ -135,6 +137,11 @@ read or replace another server's releases. When restoring, the agent checks the 
 the digests recorded at deploy time and rejects a replaced archive or a re-pushed tag
 (`STORAGE_FAILED`, `reason: digest`). Environment names in storage paths and tags are normalised
 to lowercase letters, digits and hyphens: `My Env` → `my-env`.
+
+For local and S3 storage the agent checks each archive against its `manifest.json` while writing
+it. With the containerd image store, `docker save` can succeed without the layers the store no
+longer keeps compressed; such a release is marked not stored (`STORAGE_FAILED`,
+`reason: incomplete`) and can only be rolled back while its images are still on the host.
 
 ## Deploying from CI
 

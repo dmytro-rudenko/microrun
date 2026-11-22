@@ -31,6 +31,7 @@ export function composeArgs(c: ComposeRef, extra: string[] = []): string[] {
     'compose', '-p', c.project, '--project-directory', c.dir,
     ...c.files.flatMap((f) => ['-f', resolve(c.dir, f)]),
     ...(existsSync(override) ? ['-f', override] : []),
+    ...(c.envFiles ?? []).flatMap((f) => ['--env-file', resolve(c.dir, f)]),
     ...extra,
   ];
 }

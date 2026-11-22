@@ -222,7 +222,7 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
 
   const gitLine = async (format: string) => {
     try {
-      return (await d.git(['log', '-1', `--format=${format}`])).trim();
+      return (await d.git(['log', '-1', `--format=${format}`, commit, '--'])).trim();
     } catch {
       return '';
     }

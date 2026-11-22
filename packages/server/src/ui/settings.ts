@@ -33,7 +33,7 @@ export type EnvFormParsed = Omit<EnvInput, 'storageConfigEnc' | 'deployTokenHash
 export type EnvFormValues = Partial<
   Record<
     | 'name' | 'branch' | 'is_production' | 'server_id' | 'position' | 'compose_project' | 'compose_dir'
-    | 'compose_files' | 'services' | 'migration_service' | 'db_kind' | 'db_url_env' | 'migration_tables'
+    | 'compose_files' | 'compose_env_files' | 'services' | 'migration_service' | 'db_kind' | 'db_url_env' | 'migration_tables'
     | 'expand_cmd' | 'contract_cmd' | 'cleanup_cmd' | 'schema_check' | 'health_timeout_s'
     | 'storage_kind' | 'storage_path' | 'storage_registry' | 'storage_repository' | 'storage_username'
     | 'storage_password' | 'storage_endpoint' | 'storage_region' | 'storage_bucket' | 'storage_prefix'
@@ -163,6 +163,7 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
     composeProject: req('compose_project'),
     composeDir: req('compose_dir'),
     composeFiles: lines(text(body, 'compose_files')),
+    composeEnvFiles: lines(text(body, 'compose_env_files')),
     services: services ?? [],
     migrationService,
     dbKind: choice(DB_KINDS, 'db_kind', text(body, 'db_kind'), 'postgres'),
@@ -354,6 +355,7 @@ ${fld('position', text('position', 'number'))}`)}
 ${section(tr(i, 'settings.sec.compose'), html`${fld('compose_project', text('compose_project'))}
 ${fld('compose_dir', text('compose_dir'))}
 ${fld('compose_files', area('compose_files', 3), 'compose_files')}
+${fld('compose_env_files', area('compose_env_files', 2), 'compose_env_files')}
 ${fld('services', area('services', 4), 'services')}`)}
 ${section(tr(i, 'settings.sec.database'), html`${fld('migration_service', text('migration_service'))}
 ${fld('db_kind', select({ name: 'db_kind', id: 'f-db_kind', current: v('db_kind'), options: DB_KINDS.map((k) => ({ value: k, label: k })) }))}
