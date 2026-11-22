@@ -23,16 +23,15 @@ function row(i: I18n, e: EnvVM, r: ReleaseVM): Html {
 
 const SCROLLSPY = raw(`<script>(function(){var l=document.querySelectorAll('.jump a');if(!('IntersectionObserver' in window))return;var o=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)l.forEach(function(a){a.classList.toggle('on',a.getAttribute('href')==='#'+e.target.id)})})},{rootMargin:'-60px 0px -55% 0px'});document.querySelectorAll('main section[id]').forEach(function(s){o.observe(s)})})()</script>`);
 
-export function envView(i: I18n, env: EnvVM, _now: number, parts: { history: Html; settings: Html }): Html {
+export function envView(i: I18n, env: EnvVM, _now: number, parts: { settings: Html }): Html {
   return html`<a href="/" class="${BACK}">${tr(i, 'env.back')}</a><h1 class="${H1}">${env.name} ${prodTag(i, env)}</h1>
 <div class="${SUB}"><span>${tr(i, 'env.branch', { b: env.branch })}</span><span>${tr(i, 'meta.server')}: ${env.serverName} (${tr(i, env.builtin ? 'agent.builtin' : 'agent.remote')}) ${agentBadge(i, env)}</span>
 <span>${tr(i, 'meta.compose')}: ${env.composeProject} — ${env.services.map((s) => `${s.name} · ${s.strategy}`).join(', ')}</span><span>${tr(i, 'meta.db')}: ${env.db}</span>
 <span>${tr(i, 'meta.storage')}: ${tr(i, `storage.${env.storage.kind}`)} · ${maskUrl(env.storage.target)}</span><span>${tr(i, 'env.window', { w: windowText(i, env) })}</span></div>
 <div class="mb-2.5 flex flex-col gap-2.5 empty:hidden">${offlineAlert(i, env)}${env.markerWarnings.map((w) => alert({ tone: 'error', body: markerText(i, w) }))}</div>
-<nav class="jump${env.isProduction ? ' prod' : ''} ${JUMP} ${env.isProduction ? 'border-b-2 border-prod' : 'border-b border-line'}" data-testid="env-jump"><span class="mr-2 flex items-center gap-1.5 font-bold">${env.name} ${prodTag(i, env)}</span><a href="#releases">${tr(i, 'env.sec.releases')}</a><a href="#history">${tr(i, 'env.sec.history')}</a><a href="#settings">${tr(i, 'env.sec.settings')}</a></nav>
+<nav class="jump${env.isProduction ? ' prod' : ''} ${JUMP} ${env.isProduction ? 'border-b-2 border-prod' : 'border-b border-line'}" data-testid="env-jump"><span class="mr-2 flex items-center gap-1.5 font-bold">${env.name} ${prodTag(i, env)}</span><a href="#releases">${tr(i, 'env.sec.releases')}</a><a href="#settings">${tr(i, 'env.sec.settings')}</a></nav>
 <section id="releases"><h2 class="${H2}">${tr(i, 'env.sec.releases')}</h2><table class="w-full border-collapse overflow-hidden rounded-[10px] border border-line bg-surface"><thead><tr><th class="${HEAD}">${tr(i, 'col.release')}</th><th class="${HEAD}">${tr(i, 'col.state')}</th><th class="${HEAD} max-[900px]:hidden">${tr(i, 'col.schema')}</th><th class="${HEAD}">${tr(i, 'col.window')}</th></tr></thead>
 <tbody>${env.releases.map((r) => row(i, env, r))}</tbody></table></section>
-<section id="history"><h2 class="${H2}">${tr(i, 'env.sec.history')}</h2>${parts.history}</section>
 <section id="settings"><h2 class="${H2}">${tr(i, 'env.sec.settings')}</h2>${parts.settings}</section>
 ${SCROLLSPY}`;
 }

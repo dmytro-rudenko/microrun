@@ -117,7 +117,7 @@ function rollbackBlock(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html | 
   return target && rollbackSection(i, env, r, target, csrf);
 }
 
-export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now: number): Html {
+export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, history: Html): Html {
   return html`<div class="${env.isProduction ? 'in prod p-5' : 'in p-5'}" data-testid="panel" data-release="${r.id}">
 <button class="float-right border-0 bg-transparent px-1 text-[22px] text-mute" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
 <div class="${SMALL}">${env.name} ${prodTag(i, env)}</div>
@@ -126,7 +126,7 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
 <div class="mt-1 mb-3 text-xs text-mute">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="mt-2.5 mb-1 text-xs text-mute">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
 ${rollbackBlock(i, env, r, csrf)}
-${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}</div>`;
+${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}${history}</div>`;
 }
 
 const watchOperation = (opId: string) =>

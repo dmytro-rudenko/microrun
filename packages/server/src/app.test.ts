@@ -421,8 +421,6 @@ describe('UI routes', () => {
   }
 
   const testText = (body: string, testid: string) => new RegExp(`data-testid="${testid}"[^>]*>([^<]*)<`).exec(body)?.[1];
-  const tbody = (body: string) => /<tbody>([\s\S]*)<\/tbody>/.exec(body)?.[1] ?? '';
-  const rowCount = (body: string) => tbody(body).match(/<tr>/g)?.length ?? 0;
   const keyShaped = /^[A-Za-z]\w*(\.\w+)+$/;
   const fieldError = (body: string, field: string) => new RegExp(`<li><b>${en.t(`settings.f.${field}`)}</b>: ([^<]*)</li>`).exec(body)?.[1];
 
@@ -957,8 +955,12 @@ describe('UI routes', () => {
     });
   });
 
-  describe('env page history', () => {
-    const history = async (envId: string) => /<section id="history"[\s\S]*?<\/section>/.exec((await get(`/env/${envId}`)).body)?.[0] ?? '';
+  describe('release panel history', () => {
+    const history = async (envId: string, sha: string) => {
+      const rel = (await repo.listReleases(envId)).find((r) => r.commitSha === sha)!;
+      return /data-testid="release-history"[\s\S]*$/.exec((await get(`/panel/${rel.id}`)).body)?.[0] ?? '';
+    };
+    const items = (h: string) => h.match(/data-testid="history-item"/g)?.length ?? 0;
 
     async function deployBoth() {
       await deploy(A);
@@ -968,28 +970,30 @@ describe('UI routes', () => {
       await settle(res.json().operationId);
     }
 
-    it('lists finished operations of the env, newest first, with from → to shas and the actor', async () => {
+    it('lists the finished operations into and out of the release, newest first, with from → to shas and the actor', async () => {
       await deployBoth();
-      const rows = tbody(await history(prodId));
-      expect(rowCount(await history(prodId))).toBe(2);
-      expect(rows.indexOf(`${A7} → ${B7}`)).toBeLessThan(rows.indexOf(`— → ${A7}`));
-      expect(rows).toContain(en.t('actor.ci', { name: 'alice' }));
-      expect(rows.match(/data-status="ok"/g)).toHaveLength(2);
+      const a = await history(prodId, A);
+      expect(items(a)).toBe(2);
+      expect(a.indexOf(`${A7} → ${B7}`)).toBeLessThan(a.indexOf(`— → ${A7}`));
+      expect(a).toContain(en.t('actor.ci', { name: 'alice' }));
+      expect(a.match(/data-status="ok"/g)).toHaveLength(2);
+      const b = await history(prodId, B);
+      expect(items(b)).toBe(1);
+      expect(b).not.toContain(`— → ${A7}`);
     });
 
     it('shows only the operations of its own env', async () => {
       await deployBoth();
-      expect(rowCount(await history(stagingId))).toBe(1);
-      expect(tbody(await history(stagingId))).not.toContain(B7);
-      expect(rowCount(await history(prodId))).toBe(2);
+      const staging = await history(stagingId, A);
+      expect(items(staging)).toBe(1);
+      expect(staging).not.toContain(B7);
     });
 
     it('shows the reason of a rejected operation', async () => {
       await destructiveRejection();
-      const rows = tbody(await history(prodId));
-      expect(rows).toMatch(/data-status="(failed|rejected)"/);
-      expect(rows).toContain(codeMessage(en, 'SCHEMA_DESTRUCTIVE', { objects: 'users', col: 'users' }));
-      expect(rowCount(await history(prodId))).toBe(2);
+      const b = await history(prodId, B);
+      expect(b).toMatch(/data-status="(failed|rejected)"/);
+      expect(b).toContain(codeMessage(en, 'SCHEMA_DESTRUCTIVE', { objects: 'users', col: 'users' }));
     });
 
     it('shows the mismatch and expected → deleted per rule of a succeeded cleanup', async () => {
@@ -999,19 +1003,18 @@ describe('UI routes', () => {
       expect(res.statusCode, res.body).toBe(200);
       const apply = (await ops()).find((o) => o.kind === 'cleanup' && o.params?.mode === 'apply')!;
       expect(await settle(apply.id)).toMatchObject({ status: 'succeeded', code: 'CLEANUP_MISMATCH' });
-      const rows = tbody(await history(prodId));
-      expect(rows).toContain(codeMessage(en, 'CLEANUP_MISMATCH', { expected: 3, deleted: 2 }));
-      expect(rows).toContain(en.t('cl.result', { rule: 'orphans', p: en.num(2), a: en.num(1) }));
-      expect(rows).toContain(en.t('cl.result', { rule: 'tags', p: en.num(1), a: en.num(1) }));
+      const b = await history(prodId, B);
+      expect(b).toContain(codeMessage(en, 'CLEANUP_MISMATCH', { expected: 3, deleted: 2 }));
+      expect(b).toContain(en.t('cl.result', { rule: 'orphans', p: en.num(2), a: en.num(1) }));
+      expect(b).toContain(en.t('cl.result', { rule: 'tags', p: en.num(1), a: en.num(1) }));
+      expect(b).toContain(`${B7} → ${A7}`);
     });
 
     it('lists the approval of a destructive change as an approve operation', async () => {
       await destructiveRejection();
       expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'yes' })).statusCode).toBe(200);
-      const section = await history(prodId);
       expect(en.t('kind.approve')).not.toBe('kind.approve');
-      expect(tbody(section)).toContain(en.t('kind.approve'));
-      expect(rowCount(section)).toBe(3);
+      expect(await history(prodId, B)).toContain(en.t('kind.approve'));
     });
   });
 
@@ -1079,7 +1082,6 @@ describe('UI routes', () => {
 
   describe('environment page', () => {
     const section = (body: string, id: string) => new RegExp(`<section id="${id}"[\\s\\S]*?</section>`).exec(body)?.[0] ?? '';
-    const bodyRows = (h: string) => (/<tbody>([\s\S]*)<\/tbody>/.exec(h)?.[1] ?? '').match(/<tr>/g)?.length ?? 0;
 
     it('drops the history and settings pages', async () => {
       for (const url of ['/history', '/settings/servers', `/settings/env/${prodId}`, '/settings/env/new']) {
@@ -1103,25 +1105,12 @@ describe('UI routes', () => {
       expect(body).toContain(`href="/env/${prodId}#settings" data-testid="env-settings-production"`);
     });
 
-    it('shows releases, history and settings on one env page with a production strip', async () => {
+    it('shows releases and settings on one env page with a production strip', async () => {
       const body = (await get(`/env/${prodId}`)).body;
-      for (const id of ['releases', 'history', 'settings']) expect(body).toContain(`<section id="${id}"`);
+      for (const id of ['releases', 'settings']) expect(body).toContain(`<section id="${id}"`);
+      expect(body).not.toContain('<section id="history"');
       expect(section(body, 'settings')).toContain('action="/settings/env#settings"');
       expect(body).toContain('class="jump prod ');
-    });
-
-    it('shows the last 5 operations and all of them on ?history=all', async () => {
-      for (const sha of ['c1c1c1c1', 'c2c2c2c2', 'c3c3c3c3', 'c4c4c4c4', 'c5c5c5c5', 'c6c6c6c6', 'c7c7c7c7']) {
-        await deploy(sha);
-        now += 1000;
-      }
-      const short = section((await get(`/env/${prodId}`)).body, 'history');
-      expect(bodyRows(short)).toBe(5);
-      expect(short).toContain('c7c7c7c');
-      expect(short).not.toContain('c1c1c1c');
-      expect(short).toContain('data-testid="history-all"');
-      expect(short).toContain(`href="/env/${prodId}?history=all#history"`);
-      expect(bodyRows(section((await get(`/env/${prodId}?history=all`)).body, 'history'))).toBe(7);
     });
 
     it('creates a server from server_name only and returns the block with it selected', async () => {
