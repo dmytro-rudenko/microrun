@@ -197,7 +197,22 @@ async function rollback(sha: string): Promise<OperationRow> {
   now += 1000;
   const res = await orch.requestRollback(envId, (await rel(sha))!.id);
   if (!('operationId' in res)) throw new Error(`rollback to ${sha} rejected with ${res.rejected.code}`);
-  return settle(res.operationId);
+  const op = await settle(res.operationId);
+  if (op.status === 'succeeded') await previewsSettled(op.id);
+  return op;
+}
+
+async function previewsSettled(rollbackOpId: string) {
+  await vi.waitFor(
+    async () => {
+      const blocked = (await repo.listReleases(envId)).filter((r) => r.blockedByOp === rollbackOpId && r.hasCleanupCmd);
+      const cleanups = (await ops()).filter((o) => o.kind === 'cleanup' && o.status !== 'pending' && o.status !== 'running');
+      for (const r of blocked) {
+        if (!cleanups.some((o) => o.toReleaseId === r.id)) throw new Error(`no finished cleanup preview for ${r.commitSha}`);
+      }
+    },
+    { timeout: 3000, interval: 5 },
+  );
 }
 
 function rejectedCode(res: { operationId: string } | { rejected: { code: string } }) {
@@ -330,7 +345,7 @@ describe('Orchestrator deploy', () => {
     const before = await repo.listReleases(envId);
     const res = await request(B);
     expect(res).toMatchObject({ rejected: { code: 'COMMIT_BLOCKED', params: { sha: B.slice(0, 7), env: 'prod' } } });
-    if ('rejected' in res) expect(res.rejected.params.at).toBeDefined();
+    if ('rejected' in res) expect(typeof res.rejected.params.at).toBe('number');
     expect(await repo.listReleases(envId)).toEqual(before);
   });
 
@@ -590,6 +605,29 @@ describe('Orchestrator cleanup', () => {
     expect(apply).toMatchObject({ status: 'succeeded', kind: 'cleanup', code: 'CLEANUP_MISMATCH' });
     expect(apply.cleanupResult).not.toBeNull();
     expect(await rel(C)).toMatchObject({ cleanupState: 'applied' });
+  });
+
+  it('previews every release blocked by a rollback on its own cleanup operation, newest first', async () => {
+    await deploy(A);
+    await deploy(B);
+    await deploy(C);
+    const rb = await rollback(A);
+    expect(rb.status).toBe('succeeded');
+    const cleanups = (await ops()).filter((o) => o.kind === 'cleanup');
+    const relB = (await rel(B))!;
+    const relC = (await rel(C))!;
+    expect(cleanups.map((o) => o.toReleaseId).sort()).toEqual([relB.id, relC.id].sort());
+    expect(cleanups.every((o) => o.status === 'succeeded')).toBe(true);
+    const dryRuns = agent.calls
+      .map((c) => c.cmd)
+      .filter((c): c is Extract<Command, { type: 'runCommand' }> => c.type === 'runCommand' && c.args[0] === '--dry-run');
+    expect(dryRuns.map((c) => shaIn(c.image))).toEqual([C, B]);
+    expect(relC.cleanupPreview).toEqual([
+      { rule: 'orphans', description: 'Orphan posts', count: 5 },
+      { rule: 'tags', description: 'Unused tags', count: 0 },
+    ]);
+    expect(relB.cleanupPreview).toEqual([{ rule: 'orphans', description: 'Orphan posts', count: 2 }]);
+    expect(relB.cleanupState).toBe('pending');
   });
 
   it('applies a cleanup whose deleted counts match the preview without a code', async () => {

@@ -27,7 +27,7 @@ import type {
   ServiceSpec,
   StorageConfig,
 } from '@microrun/core/protocol';
-import { i18n } from '@microrun/core/i18n';
+import { codeMessage, i18n } from '@microrun/core/i18n';
 import { BusyError } from './db/repo.ts';
 import type { EnvRow, OperationRow, OperationStatus, ReleaseRow, Repo } from './db/repo.ts';
 
@@ -55,7 +55,7 @@ class Stop extends Error {
 }
 
 const en = i18n('en');
-const message = (code: ResultCode, params: Params) => en.t(`codes.${code}`, params);
+const message = (code: ResultCode, params: Params) => codeMessage(en, code, params);
 const rejected = (code: ResultCode, params: Params = {}): { rejected: ApiError } => ({
   rejected: { code, message: message(code, params), params },
 });
@@ -107,7 +107,7 @@ export class Orchestrator {
     const decision = decideDeploy(rs, req.commit);
     if (decision.kind === 'reject') {
       const r = rs.find((x) => x.id === decision.releaseId)!;
-      return rejected(decision.code, decision.code === 'COMMIT_BLOCKED' ? { ...base, at: iso(r.blockedAt ?? 0) } : base);
+      return rejected(decision.code, decision.code === 'COMMIT_BLOCKED' ? { ...base, at: r.blockedAt ?? 0 } : base);
     }
     const now = this.now();
     const active = rs.find((r) => r.state === 'active') ?? null;
@@ -489,6 +489,25 @@ export class Orchestrator {
       await r.patchReleases(patches);
     });
     await this.finish(op, 'succeeded', null, {});
+    await this.previewBlocked(op, env);
+  }
+
+  private async previewBlocked(op: OperationRow, env: EnvRow): Promise<void> {
+    const blocked = (await this.repo.listReleases(env.id))
+      .filter((r) => r.blockedByOp === op.id && r.hasCleanupCmd && r.cleanupState === 'pending')
+      .sort((a, b) => (b.activationSeq ?? 0) - (a.activationSeq ?? 0));
+    for (const rel of blocked) {
+      try {
+        const preview = await this.repo.createOperation({
+          envId: env.id, kind: 'cleanup', fromReleaseId: null, toReleaseId: rel.id, actor: 'system', status: 'pending',
+          startedAt: this.now(), params: { env: env.name, sha: sha7(rel.commitSha), mode: 'dry-run' },
+        });
+        await this.run(preview.id);
+      } catch (e) {
+        const reason = e instanceof BusyError ? 'ENV_BUSY' : e instanceof Error ? e.message : String(e);
+        await this.log(op.id, `cleanup preview of ${sha7(rel.commitSha)} skipped: ${reason}`);
+      }
+    }
   }
 
   private async runCleanup(op: OperationRow, env: EnvRow): Promise<void> {
