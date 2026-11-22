@@ -763,11 +763,30 @@ describe('Orchestrator bindDatabase', () => {
   });
 
   it('refuses a database that carries the marker of another env', async () => {
+    const stage = await repo.saveEnv({ ...envInput(), name: 'stage', branch: 'stage', composeProject: 'stage-proj', deployTokenHash: 'deploy-stage' });
+    await repo.setEnvMarker(stage.id, '44444444-4444-4444-8444-444444444444');
     agent.marker = { envId: '44444444-4444-4444-8444-444444444444', envName: 'stage' };
     const res = await orch.bindDatabase(envId);
     expect(res).toEqual({ ok: false, code: 'DB_MARKER_MISMATCH', params: { other: 'stage' } });
     expect(agent.calls.filter((c) => c.cmd.type === 'writeMarker')).toEqual([]);
     expect((await env()).dbMarkerId).toBeNull();
+  });
+
+  it('overwrites the marker of an environment that no longer exists', async () => {
+    agent.marker = { envId: '55555555-5555-4555-8555-555555555555', envName: 'gone' };
+    const res = await orch.bindDatabase(envId);
+    expect(res).toEqual({ ok: true });
+    const writes = agent.calls.filter((c) => c.cmd.type === 'writeMarker').map((c) => c.cmd as Extract<Command, { type: 'writeMarker' }>);
+    expect(writes).toHaveLength(1);
+    expect(writes[0]!.envId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    expect(writes[0]!.envId).not.toBe('55555555-5555-4555-8555-555555555555');
+    expect((await env()).dbMarkerId).toBe(writes[0]!.envId);
+
+    const accepted = await request(A, { branch: 'fresh' });
+    if (!('operationId' in accepted)) throw new Error(`deploy rejected with ${accepted.rejected.code}`);
+    const op = await settle(accepted.operationId);
+    expect(op).toMatchObject({ status: 'succeeded', code: null });
+    expect(agent.steps(op.id)).toContain('markers');
   });
 });
 

@@ -330,7 +330,7 @@ export class Orchestrator {
       const marker = (res.markers.find((m) => m.service === env.migrationService) ?? res.markers[0])?.marker ?? null;
       if (marker) {
         if (marker.envId === env.dbMarkerId) return { ok: true };
-        return { ok: false, code: 'DB_MARKER_MISMATCH', params: { other: marker.envName } };
+        if (await this.repo.findEnvByMarker(marker.envId)) return { ok: false, code: 'DB_MARKER_MISMATCH', params: { other: marker.envName } };
       }
       const markerId = randomUUID();
       await this.call(env, opId, 'writeMarker', { type: 'writeMarker', db, envId: markerId, envName: env.name });
