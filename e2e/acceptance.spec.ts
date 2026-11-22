@@ -53,7 +53,7 @@ test('login rejects wrong credentials and accepts ENV ones', async () => {
 });
 
 test('remote npm agent comes online without inbound ports', async () => {
-  await page.goto('/settings/servers');
+  await page.goto('/env/new');
   await page.fill('[data-testid=server-name]', 'remote-1');
   await page.click('[data-testid=server-create]');
   const token = (await page.locator('[data-testid=agent-token]').innerText()).trim();
@@ -65,17 +65,22 @@ test('remote npm agent comes online without inbound ports', async () => {
   expect(await listeningPids()).not.toContain(`pid=${npmAgent.pid},`);
 
   await expect(async () => {
-    await page.goto('/settings/servers');
-    await expect(page.locator('[data-testid=server-row-remote-1]')).toHaveAttribute('data-status', 'online');
+    await page.goto('/env/new');
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/settings/servers/block')),
+      page.selectOption('[name=server_id]', { label: 'remote-1' }),
+    ]);
+    await expect(page.locator('[data-testid=agent-status]')).toHaveAttribute('data-status', 'online');
   }).toPass({ timeout: 20_000 });
 });
 
 async function fillEnvForm(name: string, branch: string, production: boolean) {
-  await page.goto('/settings/env/new');
+  await page.goto('/env/new');
   await page.fill('[name=name]', name);
   await page.fill('[name=branch]', branch);
   if (production) await page.check('[name=is_production]');
   await page.selectOption('[name=server_id]', { label: 'local' });
+  await page.waitForLoadState('networkidle');
   await page.fill('[name=compose_project]', 'mrfix');
   await page.fill('[name=compose_dir]', fixtureDir);
   await page.fill('[name=compose_files]', 'compose.yml');
@@ -126,9 +131,9 @@ test('deploy v1 then v2, write data, roll back within 60 s keeping old fields', 
 
   await page.goto('/');
   await page.click('[data-testid=rel-production-aaaaaaa]');
-  await page.fill('[data-testid=confirm-name]', 'production');
-  const started = Date.now();
   await page.click('[data-testid=rollback-go]');
+  const started = Date.now();
+  await page.click('[data-testid=confirm-yes]');
   await expect(page.locator('[data-testid=rollback-done]')).toBeVisible({ timeout: 60_000 });
   expect(Date.now() - started).toBeLessThan(60_000);
   rolledBackAt = Date.now();
@@ -167,15 +172,16 @@ test('a new commit deploys normally', async () => {
   expect((await getJson<{ version: string }>('/version')).version).toBe('v3');
 });
 
-test('production rollback requires typing the name', async () => {
+test('production rollback asks for confirmation and No cancels', async () => {
   await page.goto('/');
   await page.click('[data-testid=rel-production-aaaaaaa]');
-  const go = page.locator('[data-testid=rollback-go]');
-  await expect(go).toBeDisabled();
-  await page.fill('[data-testid=confirm-name]', 'productio');
-  await expect(go).toBeDisabled();
-  await page.fill('[data-testid=confirm-name]', 'production');
-  await expect(go).toBeEnabled();
+  const ask = page.locator('[data-testid=confirm-ask]');
+  await expect(ask).toBeHidden();
+  await page.click('[data-testid=rollback-go]');
+  await expect(ask).toBeVisible();
+  await page.click('[data-testid=confirm-no]');
+  await expect(ask).toBeHidden();
+  await expect(page.locator('[data-testid=rollback-go]')).toBeVisible();
 });
 
 test('destructive migration is rejected before touching the database', async () => {
@@ -193,7 +199,7 @@ test('UI renders in all 8 languages without raw keys', async () => {
     await page.goto('/');
     await page.selectOption('[data-testid=lang]', lang);
     await page.waitForLoadState('networkidle');
-    for (const path of ['/', envHref!, '/history']) {
+    for (const path of ['/', envHref!]) {
       await page.goto(path);
       const text = await page.locator('body').innerText();
       expect(text, `${lang} ${path}`).not.toMatch(RAW_KEY);
@@ -213,14 +219,16 @@ test('login page switches language before sign-in', async ({ browser }) => {
 });
 
 test('a server without environments is deleted through the confirmation dialog', async () => {
-  await page.goto('/settings/servers');
+  await page.goto('/env/new');
   await page.fill('[data-testid=server-name]', 'temp-1');
   await page.click('[data-testid=server-create]');
+  await expect(page.locator('#srv [data-testid=agent-token]')).toBeVisible();
   await page.click('[data-testid=server-delete-temp-1]');
   const go = page.locator('[data-testid=server-delete-go-temp-1]');
   await expect(go).toBeDisabled();
   await page.fill('[data-testid=server-delete-name-temp-1]', 'temp-1');
   await expect(go).toBeEnabled();
   await go.click();
-  await expect(page.locator('[data-testid=server-row-temp-1]')).toHaveCount(0);
+  await expect(page.locator('#srv [data-testid=server-delete-temp-1]')).toHaveCount(0);
+  await expect(page.locator('#srv select[name=server_id] option', { hasText: 'temp-1' })).toHaveCount(0);
 });

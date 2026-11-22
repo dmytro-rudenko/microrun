@@ -123,7 +123,7 @@ function column(i: I18n, e: EnvVM, now: number, selected?: string): Html {
 <div class="mt-1 mb-3 text-xs text-mute">${tr(i, 'env.branch', { b: e.branch })} · ${tr(i, 'env.window', { w: windowText(i, e) })} · ${agentBadge(i, e)}</div>
 <div class="mb-2.5 flex flex-col gap-2.5 empty:hidden">${e.markerWarnings.length > 0 && alert({ tone: 'error', body: html`⚠ ${tr(i, 'marker.short')}` })}${offlineAlert(i, e)}</div>
 <div class="tl">${e.releases.map((r) => card(i, e, r, now, selected))}</div>
-<div class="mt-1 text-xs text-mute"><a href="/env/${e.id}" class="text-accent no-underline hover:underline">${tr(i, 'env.open')}</a></div></section>`;
+<div class="mt-1 text-xs text-mute"><a href="/env/${e.id}" class="text-accent no-underline hover:underline">${tr(i, 'env.open')}</a> · <a class="text-accent no-underline hover:underline" href="/env/${e.id}#settings" data-testid="env-settings-${e.name}">${tr(i, 'env.settings')}</a></div></section>`;
 }
 
 export function boardView(i: I18n, envs: EnvVM[], now: number, selected?: string): Html {

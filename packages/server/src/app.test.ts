@@ -457,24 +457,24 @@ describe('UI routes', () => {
   }
 
   describe('POST /rollback', () => {
-    it('answers 422 when the production confirm names another env and starts nothing', async () => {
+    it('answers 422 when the production confirm is not yes and starts nothing', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'staging' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(res.body).toContain('role="alert"');
       expect((await ops()).map((o) => o.kind)).toEqual(['deploy', 'deploy']);
     });
 
     it('answers 422 for an unknown env', async () => {
-      const res = await post('/rollback', { envId: 'nope', releaseId: 'nope', confirm: 'production' });
+      const res = await post('/rollback', { envId: 'nope', releaseId: 'nope', confirm: 'yes' });
       expect(res.statusCode).toBe(422);
     });
 
     it('starts a confirmed production rollback and answers the progress panel with its steps', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(200);
       expect(res.body).toContain('data-testid="panel"');
       expect(res.body).toContain(en.t('step.image', { sha: A7 }));
@@ -490,7 +490,7 @@ describe('UI routes', () => {
     it('streams a done frame with the rollback-done header once the UI rollback finished', async () => {
       await deploy(A);
       await deploy(B);
-      await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       const rb = (await ops()).find((o) => o.kind === 'rollback')!;
       await settle(rb.id);
       const res = await get(`/ops/${rb.id}/events`);
@@ -527,7 +527,7 @@ describe('UI routes', () => {
       await deploy(A);
       await deploy(B);
       const free = await busy();
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(409);
       expect(res.body).toMatch(/<div[^>]*role="alert"/);
       expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
@@ -539,7 +539,7 @@ describe('UI routes', () => {
     it('retargets a wrong-confirm 422 into the panel alert slot as well', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'staging' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(res.headers['hx-retarget']).toBe('#panel-alert');
     });
@@ -617,16 +617,16 @@ describe('UI routes', () => {
   });
 
   describe('POST /approve', () => {
-    it('answers 422 and stores no approval when the confirm is not the env name', async () => {
+    it('answers 422 and stores no approval when the confirm is not yes', async () => {
       await destructiveRejection();
-      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'prod' });
+      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(await repo.getApproval(prodId, B)).toBeNull();
     });
 
     it('stores the approval of a SCHEMA_DESTRUCTIVE commit and answers its panel', async () => {
       await destructiveRejection();
-      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'production' });
+      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(200);
       expect(res.body).toContain(`data-release="${(await release(B)).id}"`);
       expect(await repo.getApproval(prodId, B)).toMatchObject({ envId: prodId, commitSha: B });
@@ -634,10 +634,25 @@ describe('UI routes', () => {
 
     it('answers 422 for an unknown env, an unknown sha and a commit that was never rejected', async () => {
       await destructiveRejection();
-      expect((await post('/approve', { envId: 'nope', commitSha: B, confirm: 'production' })).statusCode).toBe(422);
-      expect((await post('/approve', { envId: prodId, commitSha: 'ffffffff', confirm: 'production' })).statusCode).toBe(422);
-      expect((await post('/approve', { envId: prodId, commitSha: A, confirm: 'production' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: 'nope', commitSha: B, confirm: 'yes' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: prodId, commitSha: 'ffffffff', confirm: 'yes' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: prodId, commitSha: A, confirm: 'yes' })).statusCode).toBe(422);
       expect(await repo.getApproval(prodId, A)).toBeNull();
+    });
+
+    it('stores a staging approval without confirm and still refuses a production one', async () => {
+      const first = await postDeploy(STAGING_TOKEN, A, {}, 'develop');
+      expect(first.statusCode, first.body).toBe(202);
+      await settle(first.json().operationId);
+      await destructiveRejection();
+      expect((await post('/approve', { envId: prodId, commitSha: B })).statusCode).toBe(422);
+      expect(await repo.getApproval(prodId, B)).toBeNull();
+      const res = await postDeploy(STAGING_TOKEN, B, {}, 'develop');
+      expect(res.statusCode, res.body).toBe(202);
+      expect(await settle(res.json().operationId)).toMatchObject({ status: 'rejected', code: 'SCHEMA_DESTRUCTIVE' });
+      const ok = await post('/approve', { envId: stagingId, commitSha: B });
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(await repo.getApproval(stagingId, B)).toMatchObject({ envId: stagingId, commitSha: B });
     });
   });
 
@@ -856,8 +871,19 @@ describe('UI routes', () => {
   });
 
   describe('settings servers', () => {
+    it('answers 404 for an unknown server without letting htmx swap the block away', async () => {
+      for (const res of [
+        await get('/settings/servers/block?server_id=nope'),
+        await post('/settings/servers/nope/token'),
+        await post('/settings/servers/nope/proxy', { proxy_mode: 'bundled' }),
+      ]) {
+        expect(res.statusCode).toBe(404);
+        expect(res.headers['hx-reswap']).toBe('none');
+      }
+    });
+
     it('creates a server with its proxy mode and shows the token inside the install command', async () => {
-      const res = await post('/settings/servers', { name: 'edge', proxy_mode: 'bundled' });
+      const res = await post('/settings/servers', { server_name: 'edge', proxy_mode: 'bundled' });
       expect(res.statusCode).toBe(200);
       const token = testText(res.body, 'agent-token')!;
       const command = testText(res.body, 'agent-command')!;
@@ -868,21 +894,21 @@ describe('UI routes', () => {
     });
 
     it('keeps the default proxy mode for an unknown one and creates nothing without a name', async () => {
-      await post('/settings/servers', { name: 'edge', proxy_mode: 'weird' });
+      await post('/settings/servers', { server_name: 'edge', proxy_mode: 'weird' });
       expect((await repo.listServers()).find((s) => s.name === 'edge')!.proxyMode).toBe('external');
-      const res = await post('/settings/servers', { name: '  ' });
-      expect(res.statusCode).toBe(200);
+      const res = await post('/settings/servers', { server_name: '  ' });
+      expect(res.statusCode).toBe(422);
       expect(res.body).not.toContain('data-testid="agent-token"');
       expect(await repo.listServers()).toHaveLength(2);
     });
 
     it('trims form fields and takes the first of repeated values', async () => {
-      await post('/settings/servers', [['name', '  edge  '], ['name', 'other']]);
+      await post('/settings/servers', [['server_name', '  edge  '], ['server_name', 'other']]);
       expect((await repo.listServers()).map((s) => s.name)).toEqual(['edge', 'main']);
     });
 
     it('regenerates the agent token of a server and refuses the builtin and unknown ones', async () => {
-      await post('/settings/servers', { name: 'edge' });
+      await post('/settings/servers', { server_name: 'edge' });
       const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
       const res = await post(`/settings/servers/${edge.id}/token`);
       expect(res.statusCode).toBe(200);
@@ -894,7 +920,7 @@ describe('UI routes', () => {
     });
 
     it('reissuing a token disconnects the agent holding the old one and shows the token only in the env-var command', async () => {
-      await post('/settings/servers', { name: 'edge' });
+      await post('/settings/servers', { server_name: 'edge' });
       const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
       const socket = fakeSocket();
       hub.attachSocket(edge.id, socket, { agentVersion: '1.0.0' });
@@ -910,7 +936,7 @@ describe('UI routes', () => {
     });
 
     it('answers 422 with a server-error and creates nothing for a duplicate server name', async () => {
-      const res = await post('/settings/servers', { name: 'main' });
+      const res = await post('/settings/servers', { server_name: 'main' });
       expect(res.statusCode, res.body).toBe(422);
       expect(res.body).toContain('data-testid="server-error"');
       expect(res.body).not.toContain('data-testid="agent-token"');
@@ -921,7 +947,7 @@ describe('UI routes', () => {
     });
 
     it('changes the proxy mode of any server, the builtin one included', async () => {
-      expect((await get('/settings/servers')).body).toContain(`action="/settings/servers/${serverId}/proxy"`);
+      expect((await get(`/env/${prodId}`)).body).toContain(`hx-post="/settings/servers/${serverId}/proxy"`);
       const res = await post(`/settings/servers/${serverId}/proxy`, { proxy_mode: 'bundled' });
       expect(res.statusCode).toBe(200);
       expect((await repo.getServer(serverId))!.proxyMode).toBe('bundled');
@@ -931,7 +957,9 @@ describe('UI routes', () => {
     });
   });
 
-  describe('GET /history', () => {
+  describe('env page history', () => {
+    const history = async (envId: string) => /<section id="history"[\s\S]*?<\/section>/.exec((await get(`/env/${envId}`)).body)?.[0] ?? '';
+
     async function deployBoth() {
       await deploy(A);
       await deploy(B);
@@ -940,36 +968,28 @@ describe('UI routes', () => {
       await settle(res.json().operationId);
     }
 
-    it('lists finished operations of every env, newest first, with from → to shas and the actor', async () => {
+    it('lists finished operations of the env, newest first, with from → to shas and the actor', async () => {
       await deployBoth();
-      for (const url of ['/history', '/history?env=all']) {
-        const res = await get(url);
-        expect(res.statusCode).toBe(200);
-        expect(rowCount(res.body)).toBe(3);
-      }
-      const rows = tbody((await get('/history')).body);
-      expect(rows).toContain(`${A7} → ${B7}`);
-      expect(rows).toContain(`— → ${A7}`);
+      const rows = tbody(await history(prodId));
+      expect(rowCount(await history(prodId))).toBe(2);
+      expect(rows.indexOf(`${A7} → ${B7}`)).toBeLessThan(rows.indexOf(`— → ${A7}`));
       expect(rows).toContain(en.t('actor.ci', { name: 'alice' }));
-      expect(rows).toContain('staging');
-      expect(rows.match(/data-status="ok"/g)).toHaveLength(3);
+      expect(rows.match(/data-status="ok"/g)).toHaveLength(2);
     });
 
-    it('filters by env id and marks that filter on', async () => {
+    it('shows only the operations of its own env', async () => {
       await deployBoth();
-      const res = await get(`/history?env=${stagingId}`);
-      expect(rowCount(res.body)).toBe(1);
-      expect(tbody(res.body)).not.toContain('production');
-      expect(res.body).toMatch(new RegExp(`<a href="/history\\?env=${stagingId}"[^>]*aria-current="page"`));
-      expect(rowCount((await get(`/history?env=${prodId}`)).body)).toBe(2);
+      expect(rowCount(await history(stagingId))).toBe(1);
+      expect(tbody(await history(stagingId))).not.toContain(B7);
+      expect(rowCount(await history(prodId))).toBe(2);
     });
 
     it('shows the reason of a rejected operation', async () => {
       await destructiveRejection();
-      const rows = tbody((await get('/history')).body);
+      const rows = tbody(await history(prodId));
       expect(rows).toMatch(/data-status="(failed|rejected)"/);
       expect(rows).toContain(codeMessage(en, 'SCHEMA_DESTRUCTIVE', { objects: 'users', col: 'users' }));
-      expect(rowCount((await get('/history')).body)).toBe(2);
+      expect(rowCount(await history(prodId))).toBe(2);
     });
 
     it('shows the mismatch and expected → deleted per rule of a succeeded cleanup', async () => {
@@ -979,7 +999,7 @@ describe('UI routes', () => {
       expect(res.statusCode, res.body).toBe(200);
       const apply = (await ops()).find((o) => o.kind === 'cleanup' && o.params?.mode === 'apply')!;
       expect(await settle(apply.id)).toMatchObject({ status: 'succeeded', code: 'CLEANUP_MISMATCH' });
-      const rows = tbody((await get('/history')).body);
+      const rows = tbody(await history(prodId));
       expect(rows).toContain(codeMessage(en, 'CLEANUP_MISMATCH', { expected: 3, deleted: 2 }));
       expect(rows).toContain(en.t('cl.result', { rule: 'orphans', p: en.num(2), a: en.num(1) }));
       expect(rows).toContain(en.t('cl.result', { rule: 'tags', p: en.num(1), a: en.num(1) }));
@@ -987,11 +1007,11 @@ describe('UI routes', () => {
 
     it('lists the approval of a destructive change as an approve operation', async () => {
       await destructiveRejection();
-      expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'production' })).statusCode).toBe(200);
-      const body = (await get('/history')).body;
+      expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'yes' })).statusCode).toBe(200);
+      const section = await history(prodId);
       expect(en.t('kind.approve')).not.toBe('kind.approve');
-      expect(tbody(body)).toContain(en.t('kind.approve'));
-      expect(rowCount(body)).toBe(3);
+      expect(tbody(section)).toContain(en.t('kind.approve'));
+      expect(rowCount(section)).toBe(3);
     });
   });
 
@@ -1005,7 +1025,7 @@ describe('UI routes', () => {
       expect(panel.body).toContain(`data-release="${(await release(A)).id}"`);
       expect((await get('/env/nope')).statusCode).toBe(404);
       expect((await get('/panel/nope')).statusCode).toBe(404);
-      expect((await get('/settings/env/nope')).statusCode).toBe(404);
+      expect((await get('/env/new')).statusCode).toBe(200);
     });
 
     it('warns on the board card and the panel when an active release image is not stored', async () => {
@@ -1039,7 +1059,7 @@ describe('UI routes', () => {
     });
 
     it('prefills the env form from the stored env', async () => {
-      const res = await get(`/settings/env/${prodId}`);
+      const res = await get(`/env/${prodId}`);
       expect(res.statusCode).toBe(200);
       expect(res.body).toContain('web:rolling:shop.example.com:3000');
       expect(res.body).toContain('name="retention_value" value="1"');
@@ -1057,20 +1077,110 @@ describe('UI routes', () => {
     });
   });
 
+  describe('environment page', () => {
+    const section = (body: string, id: string) => new RegExp(`<section id="${id}"[\\s\\S]*?</section>`).exec(body)?.[0] ?? '';
+    const bodyRows = (h: string) => (/<tbody>([\s\S]*)<\/tbody>/.exec(h)?.[1] ?? '').match(/<tr>/g)?.length ?? 0;
+
+    it('drops the history and settings pages', async () => {
+      for (const url of ['/history', '/settings/servers', `/settings/env/${prodId}`, '/settings/env/new']) {
+        expect((await get(url)).statusCode, url).toBe(404);
+      }
+    });
+
+    it('opens the new environment form on /env/new', async () => {
+      const res = await get('/env/new');
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('action="/settings/env#settings"');
+      expect(res.body).toContain('data-testid="server-block"');
+    });
+
+    it('has a header with a new-environment link and no history or settings nav', async () => {
+      const body = (await get('/')).body;
+      expect(body).toContain('data-testid="env-new"');
+      expect(body).toContain('href="/env/new"');
+      expect(body).not.toContain('href="/history"');
+      expect(body).not.toContain('href="/settings/servers"');
+      expect(body).toContain(`href="/env/${prodId}#settings" data-testid="env-settings-production"`);
+    });
+
+    it('shows releases, history and settings on one env page with a production strip', async () => {
+      const body = (await get(`/env/${prodId}`)).body;
+      for (const id of ['releases', 'history', 'settings']) expect(body).toContain(`<section id="${id}"`);
+      expect(section(body, 'settings')).toContain('action="/settings/env#settings"');
+      expect(body).toContain('class="jump prod ');
+    });
+
+    it('shows the last 5 operations and all of them on ?history=all', async () => {
+      for (const sha of ['c1c1c1c1', 'c2c2c2c2', 'c3c3c3c3', 'c4c4c4c4', 'c5c5c5c5', 'c6c6c6c6', 'c7c7c7c7']) {
+        await deploy(sha);
+        now += 1000;
+      }
+      const short = section((await get(`/env/${prodId}`)).body, 'history');
+      expect(bodyRows(short)).toBe(5);
+      expect(short).toContain('c7c7c7c');
+      expect(short).not.toContain('c1c1c1c');
+      expect(short).toContain('data-testid="history-all"');
+      expect(short).toContain(`href="/env/${prodId}?history=all#history"`);
+      expect(bodyRows(section((await get(`/env/${prodId}?history=all`)).body, 'history'))).toBe(7);
+    });
+
+    it('creates a server from server_name only and returns the block with it selected', async () => {
+      const res = await post('/settings/servers', { server_name: 'edge', name: 'production' });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.body).toContain('id="srv"');
+      expect(res.body).toContain('data-testid="agent-token"');
+      const edge = (await repo.listServers()).find((s) => s.name === 'edge');
+      expect(edge).toBeDefined();
+      expect(res.body).toMatch(new RegExp(`<option value="${edge!.id}" selected`));
+      expect((await repo.listServers()).some((s) => s.name === 'production')).toBe(false);
+      expect(res.body).toContain('data-testid="agent-status" data-status="offline"');
+    });
+
+    it('keeps the selected server_id when the create answers 422', async () => {
+      await post('/settings/servers', { server_name: 'edge' });
+      const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
+      const res = await post('/settings/servers', { server_name: '', server_id: edge.id });
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.body).toContain(`<option value="${edge.id}" selected`);
+    });
+
+    it('answers 422 for a taken or empty server name and creates nothing', async () => {
+      expect((await post('/settings/servers', { server_name: 'main' })).statusCode).toBe(422);
+      expect((await post('/settings/servers', { server_name: '  ' })).statusCode).toBe(422);
+      expect(await repo.listServers()).toHaveLength(1);
+    });
+
+    it('returns the server block for a picked server with the environments using it', async () => {
+      const res = await get(`/settings/servers/block?server_id=${serverId}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toMatch(/data-testid="server-used-by"[^>]*>[^<]*production/);
+      expect((await get('/settings/servers/block?server_id=nope')).statusCode).toBe(404);
+    });
+
+    it('answers a failed save of an existing env with 422 and the whole env page', async () => {
+      const res = await post('/settings/env', { id: prodId, name: '' });
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toContain('<section id="releases"');
+      expect(res.body).toContain('data-testid="env-error"');
+    });
+  });
+
   describe('UI polish', () => {
     const edgeServer = async () => {
-      await post('/settings/servers', { name: 'edge' });
+      await post('/settings/servers', { server_name: 'edge' });
       return (await repo.listServers()).find((s) => s.name === 'edge')!;
     };
     const qaEnv = (sid: string) =>
       repo.saveEnv(envInput({ name: 'qa', branch: 'qa', isProduction: false, position: 2, serverId: sid, project: 'shop-qa', token: 'deploy-token-qa' }));
 
-    it('deletes a remote server without environments and disconnects its agent', async () => {
+    it('deletes a remote server without environments, disconnects its agent and re-renders the block on the default server', async () => {
       const edge = await edgeServer();
       const spy = vi.spyOn(hub, 'disconnect');
       const res = await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' });
-      expect(res.statusCode).toBe(303);
-      expect(res.headers.location).toBe('/settings/servers');
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('id="srv"');
+      expect(res.body).toMatch(new RegExp(`<option value="${serverId}" selected`));
+      expect(res.body).not.toContain(`<option value="${edge.id}"`);
       expect(await repo.getServer(edge.id)).toBeNull();
       expect(spy).toHaveBeenCalledWith(edge.id);
     });
@@ -1151,7 +1261,7 @@ describe('UI routes', () => {
     });
 
     it('escapes a server name exactly once in the has-envs error', async () => {
-      await post('/settings/servers', { name: 'a&b"<' });
+      await post('/settings/servers', { server_name: 'a&b"<' });
       const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
       await qaEnv(odd.id);
       const res = await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' });
@@ -1173,14 +1283,14 @@ describe('UI routes', () => {
 
     it('answers 404 to a repeated delete of the same server', async () => {
       const edge = await edgeServer();
-      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(303);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(200);
       expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(404);
     });
 
     it('deletes a server whose name carries HTML characters when confirmed with the raw name', async () => {
-      await post('/settings/servers', { name: 'a&b"<' });
+      await post('/settings/servers', { server_name: 'a&b"<' });
       const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
-      expect((await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' })).statusCode).toBe(303);
+      expect((await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' })).statusCode).toBe(200);
       expect(await repo.getServer(odd.id)).toBeNull();
     });
 
@@ -1188,7 +1298,7 @@ describe('UI routes', () => {
       const edge = await edgeServer();
       const qa = await qaEnv(edge.id);
       expect((await post(`/settings/env/${qa.id}/delete`, { confirm_name: 'qa' })).statusCode).toBe(303);
-      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(303);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(200);
     });
 
     it('binds a database whose marker belongs to a deleted environment', async () => {

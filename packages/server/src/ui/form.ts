@@ -94,8 +94,8 @@ const TONE: Record<'error' | 'warn' | 'ok', string> = {
 export const alert = (p: { tone: 'error' | 'warn' | 'ok'; body: Html; role?: 'alert' | 'status'; testid?: string; attrs?: Html }): Html =>
   html`<div${attr('role', p.role)}${attr('data-testid', p.testid)} class="rounded-lg border px-3 py-2 text-[13px] text-ink ${TONE[p.tone]}"${p.attrs}>${p.body}</div>`;
 
-export const confirmName = (p: { label: Html; expected: string; name: string; testid: string; enabled?: boolean }): Html =>
-  html`<label class="flex flex-col gap-1.5 text-xs text-mute">${p.label}<input type="text" name="${p.name}" data-testid="${p.testid}" data-name="${p.expected}" autocomplete="off" oninput="${NAME_GATE}" class="${CONTROL}"${flag(
+export const confirmName = (p: { label: Html; expected: string; name: string; testid: string; enabled?: boolean; gate?: string; attrs?: Html }): Html =>
+  html`<label class="flex flex-col gap-1.5 text-xs text-mute">${p.label}<input type="text" name="${p.name}" data-testid="${p.testid}" data-name="${p.expected}" autocomplete="off" oninput="${p.gate ?? NAME_GATE}" class="${CONTROL}"${flag(
     'disabled',
     p.enabled === false,
-  )}></label>`;
+  )}${p.attrs}></label>`;

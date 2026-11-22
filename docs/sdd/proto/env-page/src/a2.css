@@ -1,0 +1,8 @@
+.jump{position:sticky;top:env(safe-area-inset-top,0px);z-index:3;display:flex;gap:6px;flex-wrap:wrap;align-items:center;background:var(--bg);padding-block:8px;border-bottom:1px solid var(--line)}
+.jump.prod{border-bottom:2px solid var(--prod)}
+.jump .ctx{font-weight:700;margin-right:8px;display:flex;gap:6px;align-items:center}
+.jump a{padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);text-decoration:none}
+.jump a:hover{border-color:var(--accent)}
+.jump a.on{background:var(--accent);border-color:var(--accent);color:var(--on-accent)}
+.block{scroll-margin-top:60px}
+.more-btn{margin-top:8px}

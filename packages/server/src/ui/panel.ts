@@ -1,7 +1,10 @@
 import type { I18n } from '@microrun/core/i18n';
 import { codeText, html, raw, tr, type Html } from './html.ts';
 import { blockedNote, diffView, prodTag, short, releaseBadge, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
-import { alert, button, checkbox, confirmName } from './form.ts';
+import { alert, button, checkbox } from './form.ts';
+
+const ASK = "this.hidden=true;var a=this.nextElementSibling;a.hidden=false;a.querySelector('[type=submit]').focus()";
+const BACK = "var a=this.parentNode;a.hidden=true;var g=a.previousElementSibling;g.hidden=false;g.focus()";
 
 const SMALL = 'text-xs text-mute';
 const SECT = 'mt-[18px] flex flex-col gap-2 border-t border-line pt-3.5';
@@ -10,16 +13,30 @@ const post = (url: string, csrf: string) =>
 
 const hidden = (name: string, value: string) => html`<input type="hidden" name="${name}" value="${value}">`;
 
-function rollbackSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
+const confirmedAction = (i: I18n, env: EnvVM, testid: string, label: Html, variant: 'primary' | 'danger', disabled: boolean): Html =>
+  env.isProduction
+    ? html`${button({ block: true, variant, type: 'button', testid, disabled, label, attrs: html` onclick="${ASK}"` })}
+<div class="flex flex-col gap-2" data-testid="confirm-ask" hidden>${hidden('confirm', 'yes')}<b>${tr(i, 'confirm.ask')}</b>
+${button({ block: true, variant, testid: 'confirm-yes', label: tr(i, 'confirm.yes') })}
+${button({ block: true, variant: 'ghost', type: 'button', testid: 'confirm-no', label: tr(i, 'confirm.no'), attrs: html` onclick="${BACK}"` })}</div>`
+    : button({ block: true, variant, testid, disabled, label });
+
+function rollbackTarget(env: EnvVM, r: ReleaseVM): ReleaseVM | null {
+  if (r.state === 'available') return r;
+  if (r.state !== 'active') return null;
+  return env.releases.filter((x) => x.state === 'available').reduce<ReleaseVM | null>((best, x) => ((x.activationSeq ?? 0) > (best?.activationSeq ?? -1) ? x : best), null);
+}
+
+function rollbackSection(i: I18n, env: EnvVM, r: ReleaseVM, target: ReleaseVM, csrf: string): Html {
+  const switching = r.state === 'available';
   const current = env.releases.find((x) => x.state === 'active');
-  const blocked = env.releases.filter((x) => x.state === 'active' || (x.state === 'available' && (x.activationSeq ?? 0) > (r.activationSeq ?? 0)));
+  const blocked = env.releases.filter((x) => x.state === 'active' || (x.state === 'available' && (x.activationSeq ?? 0) > (target.activationSeq ?? 0)));
   const reason = !env.agentOnline ? 'rb.noAgent' : env.markerWarnings.length > 0 ? 'rb.noMarker' : null;
-  return html`<form class="${SECT}" ${post('/rollback', csrf)}>${hidden('envId', env.id)}${hidden('releaseId', r.id)}
-<b>${tr(i, 'rb.title', { from: current ? short(current.sha) : '—', to: short(r.sha) })}</b>
+  return html`<form class="${SECT}" ${post('/rollback', csrf)}>${hidden('envId', env.id)}${hidden('releaseId', target.id)}
+<b>${tr(i, switching ? 'rb.switchTitle' : 'rb.title', { from: current ? short(current.sha) : '—', to: short(target.sha) })}</b>
 <div class="${SMALL}">${tr(i, 'rb.willBlock')} ${blocked.flatMap((b, k) => [k ? ', ' : '', html`<span class="font-mono font-bold">${short(b.sha)}</span>`])}</div>
 <div class="${SMALL}">${tr(i, 'rb.schema')}</div>
-${env.isProduction && confirmName({ label: tr(i, 'rb.confirm', { name: env.name }), expected: env.name, name: 'confirm', testid: 'confirm-name', enabled: reason === null })}
-${button({ block: true, variant: env.isProduction ? 'danger' : 'primary', testid: 'rollback-go', disabled: reason !== null || env.isProduction, label: tr(i, 'rb.go') })}
+${confirmedAction(i, env, 'rollback-go', tr(i, switching ? 'rb.switch' : 'rb.go'), env.isProduction ? 'danger' : 'primary', reason !== null)}
 ${reason && html`<div class="mt-1.5 text-xs text-prod">${tr(i, reason)}</div>`}</form>`;
 }
 
@@ -29,8 +46,7 @@ function approveSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
 <b>${tr(i, 'approve.title')}</b>
 <div class="${SMALL}">${tr(i, 'approve.text', { sha: short(r.sha), col: r.failNote?.params.col ?? '' })}</div>
 ${expiring.length > 0 && html`<div class="${SMALL}">${tr(i, 'approve.expires', { list: expiring.join(', ') })}</div>`}
-${confirmName({ label: tr(i, 'rb.confirm', { name: env.name }), expected: env.name, name: 'confirm', testid: 'approve-name' })}
-${button({ block: true, variant: 'danger', testid: 'approve-destructive', disabled: true, label: tr(i, 'approve.go') })}</form>`;
+${confirmedAction(i, env, 'approve-destructive', tr(i, 'approve.go'), 'danger', false)}</form>`;
 }
 
 function contractSection(i: I18n, r: ReleaseVM, csrf: string): Html {
@@ -96,6 +112,11 @@ ${button({ block: true, variant: 'danger', testid: 'cleanup-apply', disabled: !t
 ${button({ block: true, variant: 'ghost', type: 'button', testid: 'cleanup-skip', attrs: html` hx-post="/cleanup/dismiss"`, label: tr(i, 'cl.skip') })}</form>`;
 }
 
+function rollbackBlock(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html | null {
+  const target = rollbackTarget(env, r);
+  return target && rollbackSection(i, env, r, target, csrf);
+}
+
 export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now: number): Html {
   return html`<div class="${env.isProduction ? 'in prod p-5' : 'in p-5'}" data-testid="panel" data-release="${r.id}">
 <button class="float-right border-0 bg-transparent px-1 text-[22px] text-mute" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
@@ -104,7 +125,7 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
 <h2 class="my-1 text-2xl font-bold"><span class="font-mono font-bold">${short(r.sha)}</span> ${releaseBadge(i, r.state)}</h2><div>${r.message}</div>
 <div class="mt-1 mb-3 text-xs text-mute">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="mt-2.5 mb-1 text-xs text-mute">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
-${r.state === 'available' && rollbackSection(i, env, r, csrf)}
+${rollbackBlock(i, env, r, csrf)}
 ${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}</div>`;
 }
 

@@ -9,13 +9,13 @@ import { setLangCookie } from '../auth.ts';
 import { decrypt, encrypt, hashToken, newToken } from '../crypto.ts';
 import { composeRefOf, type EnvRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
 import { boardView, short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
-import { envView } from '../ui/env.ts';
+import { envView, newEnvView } from '../ui/env.ts';
 import { alert } from '../ui/form.ts';
-import { historyView, type HistoryVM } from '../ui/history.ts';
+import { envHistory, type HistoryVM } from '../ui/history.ts';
 import { codeText, html, type Html } from '../ui/html.ts';
 import { layout } from '../ui/layout.ts';
 import { opProgressView, panelView } from '../ui/panel.ts';
-import { envFormView, parseEnvForm, serversView, text as field, type EnvFormParsed, type EnvFormValues } from '../ui/settings.ts';
+import { envFormView, parseEnvForm, serverBlock, text as field, type EnvFormParsed, type EnvFormValues } from '../ui/settings.ts';
 import { statusFor, wire } from './api.ts';
 
 type Body = Record<string, string | string[]>;
@@ -54,8 +54,8 @@ type EnvFormInput = {
   rollingHint?: boolean;
 };
 
-const page = (req: FastifyRequest, reply: FastifyReply, title: string, active: 'envs' | 'history' | 'settings', body: Html, status = 200) =>
-  sendHtml(reply, layout({ i: langOf(req), title, active, csrf: req.csrfToken, body }), status);
+const page = (req: FastifyRequest, reply: FastifyReply, title: string, body: Html, status = 200) =>
+  sendHtml(reply, layout({ i: langOf(req), title, csrf: req.csrfToken, body }), status);
 
 function readStorage(d: AppDeps, env: EnvRow): StorageConfig | null {
   try {
@@ -195,16 +195,21 @@ const agentCommand = (d: AppDeps, token: string) =>
 
 const isProxyMode = (m: string): m is ServerRow['proxyMode'] => m === 'external' || m === 'bundled';
 
-async function serversPage(
+const noBlock = (reply: FastifyReply) => reply.code(404).header('HX-Reswap', 'none').send();
+
+async function blockFor(
   d: AppDeps,
   req: FastifyRequest,
-  reply: FastifyReply,
-  created?: { name: string; token: string; command: string },
-  error?: string,
-  status = 200,
-) {
-  const i = langOf(req);
-  return page(req, reply, i.t('settings.servers.title'), 'settings', serversView(i, await serverRows(d), req.csrfToken, created, error), status);
+  selected: string,
+  extra: { created?: { name: string; token: string; command: string }; error?: string } = {},
+): Promise<Html> {
+  const usedBy = (await d.repo.listEnvs()).filter((e) => e.serverId === selected).map((e) => e.name);
+  return serverBlock(langOf(req), { servers: await serverRows(d), selected, usedBy, csrf: req.csrfToken, ...extra });
+}
+
+async function defaultServer(d: AppDeps): Promise<string> {
+  const servers = await d.repo.listServers();
+  return (servers.find((s) => s.builtin) ?? servers[0])?.id ?? '';
 }
 
 function storageValues(s: StorageConfig | null): EnvFormValues {
@@ -256,11 +261,22 @@ const bodyValues = (b: Body): EnvFormValues => {
   return out as EnvFormValues;
 };
 
-async function envForm(d: AppDeps, req: FastifyRequest, reply: FastifyReply, p: EnvFormInput, status = 200) {
+async function settingsHtml(d: AppDeps, req: FastifyRequest, p: EnvFormInput): Promise<Html> {
+  const serverBlock = await blockFor(d, req, p.values.server_id || (await defaultServer(d)));
+  return envFormView(langOf(req), { ...p, csrf: req.csrfToken, serverBlock });
+}
+
+async function envPage(d: AppDeps, req: FastifyRequest, reply: FastifyReply, env: EnvRow, p: EnvFormInput, historyAll: boolean, status = 200) {
   const i = langOf(req);
-  const servers = (await d.repo.listServers()).map((s) => ({ id: s.id, name: s.name }));
-  const title = i.t(p.isNew ? 'settings.env.newTitle' : 'settings.env.editTitle');
-  return page(req, reply, title, 'settings', envFormView(i, { ...p, servers, csrf: req.csrfToken }), status);
+  const rels = new Map((await d.repo.listReleases(env.id)).map((r) => [r.id, r]));
+  const rows = (await d.repo.listOperations({ envId: env.id, limit: OPS_PER_ENV })).filter(finished).flatMap((o) => historyRow(o, [env], rels));
+  const parts = { history: envHistory(i, rows, env.id, historyAll), settings: await settingsHtml(d, req, p) };
+  return page(req, reply, env.name, envView(i, await oneEnvVM(d, env), d.clock(), parts), status);
+}
+
+async function newEnvPage(d: AppDeps, req: FastifyRequest, reply: FastifyReply, p: EnvFormInput, status = 200) {
+  const i = langOf(req);
+  return page(req, reply, i.t('settings.env.newTitle'), newEnvView(i, await settingsHtml(d, req, p)), status);
 }
 
 type InspectedService = ResultMap['inspectEnv']['services'][number];
@@ -349,24 +365,15 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const servers = await repo.listServers();
     const now = clock();
     const envs = await Promise.all((await repo.listEnvs()).map((e) => envVM(d, e, servers, now)));
-    return page(req, reply, i.t('nav.envs'), 'envs', boardView(i, envs, now));
+    return page(req, reply, i.t('nav.envs'), boardView(i, envs, now));
   });
 
-  app.get<{ Params: { id: string } }>('/env/:id', async (req, reply) => {
+  app.get('/env/new', async (req, reply) => newEnvPage(d, req, reply, { values: {}, errors: {}, isNew: true }));
+
+  app.get<{ Params: { id: string }; Querystring: { history?: string } }>('/env/:id', async (req, reply) => {
     const env = await repo.getEnv(req.params.id);
     if (!env) return reply.code(404).send();
-    return page(req, reply, env.name, 'envs', envView(langOf(req), await oneEnvVM(d, env), clock()));
-  });
-
-  app.get<{ Querystring: { env?: string } }>('/history', async (req, reply) => {
-    const i = langOf(req);
-    const filter = req.query.env ?? '';
-    const envs = await repo.listEnvs();
-    const ops = await repo.listOperations({ envId: filter && filter !== 'all' ? filter : undefined, limit: 200 });
-    const rels = new Map<string, ReleaseRow>();
-    for (const e of envs) for (const r of await repo.listReleases(e.id)) rels.set(r.id, r);
-    const rows = ops.filter(finished).flatMap((o) => historyRow(o, envs, rels));
-    return page(req, reply, i.t('nav.history'), 'history', historyView(i, rows, envs.map((e) => ({ id: e.id, name: e.name })), filter));
+    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false }, req.query.history === 'all');
   });
 
   app.get<{ Params: { releaseId: string } }>('/panel/:releaseId', async (req, reply) => panelOr404(d, req, reply, req.params.releaseId));
@@ -376,7 +383,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const i = langOf(req);
     const env = await repo.getEnv(field(b, 'envId'));
     if (!env) return rejection(reply, i, 'INVALID_REQUEST');
-    if (env.isProduction && field(b, 'confirm') !== env.name) return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
+    if (env.isProduction && field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
     return started(d, req, reply, await orchestrator.requestRollback(env.id, field(b, 'releaseId')));
   });
 
@@ -418,7 +425,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const b = bodyOf(req);
     const i = langOf(req);
     const env = await repo.getEnv(field(b, 'envId'));
-    if (!env || field(b, 'confirm') !== env.name) return rejection(reply, i, 'INVALID_REQUEST', env ? { env: env.name } : {});
+    if (!env) return rejection(reply, i, 'INVALID_REQUEST', {});
+    if (env.isProduction && field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
     const sha = field(b, 'commitSha');
     try {
       await orchestrator.approveDestructive(env.id, sha);
@@ -449,52 +457,61 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     return reply.redirect(back, 303);
   });
 
-  app.get('/settings/servers', async (req, reply) => serversPage(d, req, reply));
+  app.get<{ Querystring: { server_id?: string } }>('/settings/servers/block', async (req, reply) => {
+    const server = await repo.getServer(req.query.server_id ?? '');
+    if (!server) return noBlock(reply);
+    return sendHtml(reply, await blockFor(d, req, server.id));
+  });
 
   app.post('/settings/servers', async (req, reply) => {
     const b = bodyOf(req);
-    const name = field(b, 'name');
-    if (!name) return serversPage(d, req, reply);
+    const name = field(b, 'server_name');
     const i = langOf(req);
-    if ((await repo.listServers()).some((s) => s.name === name)) return serversPage(d, req, reply, undefined, i.t('settings.err.serverTaken'), 422);
+    const picked = field(b, 'server_id');
+    const keep = async () => ((await repo.getServer(picked)) ? picked : await defaultServer(d));
+    if (!name) return sendHtml(reply, await blockFor(d, req, await keep(), { error: i.t('settings.err.required') }), 422);
+    if ((await repo.listServers()).some((s) => s.name === name)) {
+      return sendHtml(reply, await blockFor(d, req, await keep(), { error: i.t('settings.err.serverTaken') }), 422);
+    }
     const token = newToken();
     const server = await repo.createServer({ name, agentTokenHash: hashToken(token), builtin: false });
     const proxy = field(b, 'proxy_mode');
     if (isProxyMode(proxy)) await repo.updateServer(server.id, { proxyMode: proxy });
-    return serversPage(d, req, reply, { name, token, command: agentCommand(d, token) });
+    return sendHtml(reply, await blockFor(d, req, server.id, { created: { name, token, command: agentCommand(d, token) } }));
   });
 
   app.post<{ Params: { id: string } }>('/settings/servers/:id/token', async (req, reply) => {
     const server = await repo.getServer(req.params.id);
-    if (!server || server.builtin) return reply.code(404).send();
+    if (!server || server.builtin) return noBlock(reply);
     const token = newToken();
     await repo.updateServer(server.id, { agentTokenHash: hashToken(token) });
     d.hub.disconnect(server.id);
-    return serversPage(d, req, reply, { name: server.name, token, command: agentCommand(d, token) });
+    return sendHtml(reply, await blockFor(d, req, server.id, { created: { name: server.name, token, command: agentCommand(d, token) } }));
   });
 
   app.post<{ Params: { id: string } }>('/settings/servers/:id/proxy', async (req, reply) => {
     const server = await repo.getServer(req.params.id);
-    if (!server) return reply.code(404).send();
+    if (!server) return noBlock(reply);
     const mode = field(bodyOf(req), 'proxy_mode');
     if (isProxyMode(mode)) await repo.updateServer(server.id, { proxyMode: mode });
-    return serversPage(d, req, reply);
+    return sendHtml(reply, await blockFor(d, req, server.id));
   });
 
   app.post<{ Params: { id: string } }>('/settings/servers/:id/delete', async (req, reply) => {
     const server = await repo.getServer(req.params.id);
-    if (!server) return reply.code(404).send();
+    if (!server) return noBlock(reply);
     const i = langOf(req);
-    if (field(bodyOf(req), 'confirm_name') !== server.name) return serversPage(d, req, reply, undefined, i.text('settings.confirmName', { name: server.name }), 400);
+    const refuse = async (error: string, status: number) => sendHtml(reply, await blockFor(d, req, server.id, { error }), status);
+    if (field(bodyOf(req), 'confirm_name') !== server.name) return refuse(i.text('settings.confirmName', { name: server.name }), 400);
     const res = await repo.deleteServer(server.id);
-    if (res === 'missing') return reply.code(404).send();
-    if (res === 'builtin') return serversPage(d, req, reply, undefined, i.text('settings.servers.deleteBuiltin'), 409);
+    if (res === 'missing') return noBlock(reply);
+    if (res === 'builtin') return refuse(i.text('settings.servers.deleteBuiltin'), 409);
     if (res === 'has-envs') {
       const n = await repo.countEnvsOnServer(server.id);
-      return serversPage(d, req, reply, undefined, i.text('settings.servers.deleteHasEnvs', { name: server.name, n }), 409);
+      return refuse(i.text('settings.servers.deleteHasEnvs', { name: server.name, n }), 409);
     }
     d.hub.disconnect(server.id);
-    return reply.redirect('/settings/servers', 303);
+    return sendHtml(reply, await blockFor(d, req, await defaultServer(d)));
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/delete', async (req, reply) => {
@@ -502,20 +519,12 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (!env) return reply.code(404).send();
     const i = langOf(req);
     const again = (deleteError: string, status: number) =>
-      envForm(d, req, reply, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, status);
+      envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, false, status);
     if (field(bodyOf(req), 'confirm_name') !== env.name) return again(i.text('settings.confirmName', { name: env.name }), 400);
     const res = await repo.deleteEnv(env.id);
     if (res === 'missing') return reply.code(404).send();
     if (res === 'busy') return again(i.text('settings.env.deleteBusy', { name: env.name }), 409);
     return reply.redirect('/', 303);
-  });
-
-  app.get('/settings/env/new', async (req, reply) => envForm(d, req, reply, { values: {}, errors: {}, isNew: true }));
-
-  app.get<{ Params: { id: string } }>('/settings/env/:id', async (req, reply) => {
-    const env = await repo.getEnv(req.params.id);
-    if (!env) return reply.code(404).send();
-    return envForm(d, req, reply, { values: toValues(d, env), errors: {}, isNew: false });
   });
 
   app.post('/settings/env', async (req, reply) => {
@@ -524,12 +533,16 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const existing = id ? await repo.getEnv(id) : null;
     if (id && !existing) return reply.code(404).send();
     const values = bodyValues(b);
+    const rejected = (errors: Record<string, string>) =>
+      existing
+        ? envPage(d, req, reply, existing, { values, errors, isNew: false, storedName: existing.name }, false, 422)
+        : newEnvPage(d, req, reply, { values, errors, isNew: true }, 422);
     const parsed = parseEnvForm(b);
-    if (!parsed.ok) return envForm(d, req, reply, { values, errors: parsed.errors, isNew: !existing, storedName: existing?.name }, 422);
+    if (!parsed.ok) return rejected(parsed.errors);
     const taken = await uniquenessErrors(d, parsed.value, existing?.id);
-    if (taken) return envForm(d, req, reply, { values, errors: taken, isNew: !existing, storedName: existing?.name }, 422);
+    if (taken) return rejected(taken);
     const rolling = await rollingCheck(d, parsed.value);
-    if (rolling.errors) return envForm(d, req, reply, { values, errors: rolling.errors, isNew: !existing, storedName: existing?.name }, 422);
+    if (rolling.errors) return rejected(rolling.errors);
     const { storageConfig, ...rest } = parsed.value;
     const storage = keepSecrets(storageConfig, existing ? readStorage(d, existing) : null);
     const token = existing ? undefined : newToken();
@@ -539,7 +552,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
       deployTokenHash: existing ? existing.deployTokenHash : hashToken(token!),
       ...(existing ? { id: existing.id } : {}),
     });
-    return envForm(d, req, reply, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown });
+    return envPage(d, req, reply, saved, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown }, false);
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/bind', async (req, reply) => {
@@ -550,7 +563,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const text = res.ok
       ? `${i.text('settings.env.bind')}: ${i.text('common.yes')}`
       : codePlain(i, res.code, { env: env.name, svc: env.migrationService, ...res.params });
-    return envForm(d, req, reply, { values: toValues(d, (await repo.getEnv(env.id))!), errors: {}, isNew: false, bind: { ok: res.ok, text } });
+    const fresh = (await repo.getEnv(env.id))!;
+    return envPage(d, req, reply, fresh, { values: toValues(d, fresh), errors: {}, isNew: false, bind: { ok: res.ok, text } }, false);
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/token', async (req, reply) => {
@@ -558,6 +572,6 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (!env) return reply.code(404).send();
     const token = newToken();
     await repo.saveEnv({ ...env, deployTokenHash: hashToken(token) });
-    return envForm(d, req, reply, { values: toValues(d, env), errors: {}, isNew: false, deployToken: token });
+    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deployToken: token }, false);
   });
 }

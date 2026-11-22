@@ -183,90 +183,133 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
 
 const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 
-const H1 = 'mt-2 mb-1 font-display text-2xl font-bold';
-const TABLE = 'w-full border-collapse overflow-hidden rounded-[10px] border border-line bg-surface';
-const TH = 'border-b border-line px-3 py-2.5 text-left align-middle text-xs font-semibold text-mute max-[900px]:p-2';
-const TD = 'border-b border-line px-3 py-2.5 text-left align-middle max-[900px]:p-2 [overflow-wrap:anywhere]';
 const PROXY_OPTIONS = PROXY_MODES.map((m) => ({ value: m, label: m }));
+const LABEL = 'text-sm font-medium text-ink';
+
+const FORM_CLOSE = "var f=this.querySelector('form');f.reset();f.querySelector('button[type=submit]').disabled=true";
+const HX_GATE = "this.closest('dialog').querySelector('button[hx-post]').disabled=this.value!==this.dataset.name";
+const HX_ENTER = "if(event.key==='Enter'){event.preventDefault();var b=this.closest('dialog').querySelector('button[hx-post]');if(!b.disabled)b.click()}";
+const HX_CLOSE = "this.querySelector('[name=confirm_name]').value='';this.querySelector('button[hx-post]').disabled=true";
 
 function deleteDialog(
   i: I18n,
-  p: { base: string; suffix: string; action: string; csrf: Html; title: Html; body: Html; expected: string },
+  p: { base: string; suffix: string; title: Html; body: Html; expected: string; target: { action: string; csrf: Html } | { hx: Html } },
 ): Html {
+  const t = p.target;
+  const hx = 'hx' in t ? t.hx : null;
+  const gate = confirmName({
+    label: tr(i, 'settings.confirmName', { name: p.expected }),
+    expected: p.expected,
+    name: 'confirm_name',
+    testid: `${p.base}-name${p.suffix}`,
+    ...(hx ? { gate: HX_GATE, attrs: html` onkeydown="${HX_ENTER}"` } : {}),
+  });
+  const cancel = button({
+    type: 'button',
+    variant: 'ghost',
+    label: tr(i, 'common.cancel'),
+    attrs: raw(` onclick="this.closest('dialog').close()"`),
+  });
+  const go = button({
+    variant: 'danger',
+    testid: `${p.base}-go${p.suffix}`,
+    disabled: true,
+    label: tr(i, 'settings.delete'),
+    ...(hx ? { type: 'button' as const, attrs: hx } : {}),
+  });
+  const content = html`<h2 class="font-display text-lg font-semibold">${p.title}</h2>
+<p class="text-sm text-mute">${p.body}</p>
+${gate}
+<div class="flex justify-end gap-2">${cancel}${go}</div>`;
   return html`${button({
     type: 'button',
     variant: 'danger',
     testid: p.base + p.suffix,
     label: tr(i, 'settings.delete'),
     attrs: raw(' onclick="this.nextElementSibling.showModal()"'),
-  })}<dialog data-testid="${p.base}-dialog${p.suffix}" onclose="var f=this.querySelector('form');f.reset();f.querySelector('button[type=submit]').disabled=true" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
-<form method="post" action="${p.action}" class="flex flex-col gap-4">${p.csrf}
-<h2 class="font-display text-lg font-semibold">${p.title}</h2>
-<p class="text-sm text-mute">${p.body}</p>
-${confirmName({ label: tr(i, 'settings.confirmName', { name: p.expected }), expected: p.expected, name: 'confirm_name', testid: `${p.base}-name${p.suffix}` })}
-<div class="flex justify-end gap-2">${button({
-    type: 'button',
-    variant: 'ghost',
-    label: tr(i, 'common.cancel'),
-    attrs: raw(` onclick="this.closest('dialog').close()"`),
-  })}${button({ variant: 'danger', testid: `${p.base}-go${p.suffix}`, disabled: true, label: tr(i, 'settings.delete') })}</div>
-</form></dialog>`;
+  })}<dialog data-testid="${p.base}-dialog${p.suffix}" onclose="${hx ? HX_CLOSE : FORM_CLOSE}" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
+${'hx' in t ? html`<div class="flex flex-col gap-4">${content}</div>` : html`<form method="post" action="${t.action}" class="flex flex-col gap-4">${t.csrf}
+${content}</form>`}</dialog>`;
 }
 
-export function serversView(
+export type ServerOption = { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string };
+
+export function serverBlock(
   i: I18n,
-  servers: { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string }[],
-  csrf: string,
-  created?: { name: string; token: string; command: string },
-  error?: string,
+  p: {
+    servers: ServerOption[];
+    selected: string;
+    usedBy: string[];
+    csrf: string;
+    created?: { name: string; token: string; command: string };
+    error?: string;
+  },
 ): Html {
-  const token = html`<input type="hidden" name="_csrf" value="${csrf}">`;
-  const proxyForm = (s: (typeof servers)[number]) =>
-    html`<form method="post" action="/settings/servers/${s.id}/proxy">${token}${select({
-      name: 'proxy_mode',
-      compact: true,
-      current: s.proxyMode,
-      options: PROXY_OPTIONS,
-      attrs: html` aria-label="${i.t('settings.servers.proxy')}" onchange="this.form.submit()"`,
-    })}</form>`;
-  const actions = (s: (typeof servers)[number]) =>
-    html`<div class="flex flex-wrap gap-2"><form method="post" action="/settings/servers/${s.id}/token">${token}${button({
-      variant: 'ghost',
-      label: tr(i, 'settings.servers.reissue'),
-    })}</form>${deleteDialog(i, {
-      base: 'server-delete',
-      suffix: `-${s.name}`,
-      action: `/settings/servers/${s.id}/delete`,
-      csrf: token,
-      title: tr(i, 'settings.servers.deleteTitle', { name: s.name }),
-      body: tr(i, 'settings.servers.deleteBody'),
-      expected: s.name,
-    })}</div>`;
-  const row = (s: (typeof servers)[number]) => html`<tr data-testid="server-row-${s.name}" data-status="${s.online ? 'online' : 'offline'}">
-<td class="${TD}">${s.name}</td><td class="${TD}"><span class="${s.online ? 'text-ok' : 'text-mute'}">${tr(i, s.online ? 'agent.online' : 'agent.offline')}</span>${s.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</td>
-<td class="${TD}">${s.agentVersion ?? '—'}</td><td class="${TD}">${proxyForm(s)}</td>
-<td class="${TD}">${s.builtin ? '' : actions(s)}</td></tr>`;
-  const alerts = [
-    created
-      ? alert({
-          tone: 'ok',
-          role: 'status',
-          body: html`<p>${tr(i, 'settings.servers.created', { name: created.name })}</p>
+  const cur = p.servers.find((s) => s.id === p.selected) ?? p.servers[0]!;
+  const hdr = JSON.stringify({ 'x-csrf-token': p.csrf });
+  const hx = (url: string, params: string) => html` hx-post="${url}" hx-params="${params}" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`;
+  const created = p.created;
+  return html`<div id="srv" data-testid="server-block" class="flex flex-col gap-3 rounded-lg border border-line bg-bg p-3">
+${select({
+  name: 'server_id',
+  id: 'f-server_id',
+  current: cur.id,
+  options: p.servers.map((s) => ({ value: s.id, label: s.name })),
+  attrs: html` hx-get="/settings/servers/block" hx-target="#srv" hx-swap="outerHTML"`,
+})}
+<div class="flex flex-wrap items-center gap-3 text-xs text-mute"><span data-testid="agent-status" data-status="${cur.online ? 'online' : 'offline'}" class="${cur.online ? 'text-ok' : 'text-mute'}">${tr(i, cur.online ? 'agent.online' : 'agent.offline')}${cur.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</span>
+<span class="font-mono">${cur.agentVersion ?? '—'}</span>
+<label class="inline-flex items-center gap-2">${tr(i, 'settings.servers.proxy')} ${select({
+  name: 'proxy_mode',
+  compact: true,
+  current: cur.proxyMode,
+  options: PROXY_OPTIONS,
+  attrs: html` hx-post="/settings/servers/${cur.id}/proxy" hx-trigger="change" hx-params="proxy_mode" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`,
+})}</label>
+${p.usedBy.length ? html`<span data-testid="server-used-by">${tr(i, 'srv.usedBy', { list: p.usedBy.join(', ') })}</span>` : ''}</div>
+${cur.builtin ? '' : html`<div class="flex flex-wrap gap-2">${button({
+  type: 'button',
+  variant: 'ghost',
+  testid: 'server-reissue',
+  label: tr(i, 'settings.servers.reissue'),
+  attrs: hx(`/settings/servers/${cur.id}/token`, 'none'),
+})}${deleteDialog(i, {
+  base: 'server-delete',
+  suffix: `-${cur.name}`,
+  title: tr(i, 'settings.servers.deleteTitle', { name: cur.name }),
+  body: tr(i, 'settings.servers.deleteBody'),
+  expected: cur.name,
+  target: { hx: html`${hx(`/settings/servers/${cur.id}/delete`, 'confirm_name')} hx-include="closest dialog"` },
+})}</div>`}
+${
+  created
+    ? alert({
+        tone: 'ok',
+        role: 'status',
+        body: html`<p>${tr(i, 'settings.servers.created', { name: created.name })}</p>
 <code data-testid="agent-token" class="mt-1.5 block font-mono text-[13px] [overflow-wrap:anywhere]">${created.token}</code>
 <p class="mt-2.5">${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command" class="mt-1.5 overflow-x-auto rounded-md bg-code p-2 font-mono text-xs">${created.command}</pre>`,
-        })
-      : '',
-    error ? alert({ tone: 'error', role: 'alert', testid: 'server-error', body: html`${error}` }) : '',
-  ].filter(Boolean);
-  return html`<h1 class="${H1}">${tr(i, 'settings.servers.title')}</h1>
-<div class="mt-4 flex flex-col gap-4">
-${alerts.length ? html`<div class="flex flex-col gap-3">${alerts}</div>` : ''}
-<form method="post" action="/settings/servers" class="flex flex-wrap items-end gap-4 rounded-xl border border-line bg-surface p-5">${token}
-${field({ id: 'f-server-name', label: tr(i, 'settings.servers.name'), control: input({ name: 'name', id: 'f-server-name', testid: 'server-name', required: true }) })}
-${field({ id: 'f-server-proxy', label: tr(i, 'settings.servers.proxy'), control: select({ name: 'proxy_mode', id: 'f-server-proxy', options: PROXY_OPTIONS }) })}
-${button({ testid: 'server-create', label: tr(i, 'settings.servers.create') })}</form>
-<div class="overflow-x-auto"><table class="${TABLE}"><thead><tr><th class="${TH}">${tr(i, 'settings.servers.colName')}</th><th class="${TH}">${tr(i, 'settings.servers.colStatus')}</th><th class="${TH}">${tr(i, 'settings.servers.colVersion')}</th><th class="${TH}">${tr(i, 'settings.servers.proxy')}</th><th class="${TH}"></th></tr></thead>
-<tbody>${servers.map(row)}</tbody></table>
+      })
+    : ''
+}
+${p.error ? alert({ tone: 'error', role: 'alert', testid: 'server-error', body: html`${p.error}` }) : ''}
+<div class="flex flex-wrap items-end gap-2">${field({
+  id: 'f-server-name',
+  label: tr(i, 'srv.add'),
+  control: input({
+    name: 'server_name',
+    id: 'f-server-name',
+    testid: 'server-name',
+    autocomplete: 'off',
+    attrs: raw(` onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('#srv').querySelector('[data-testid=server-create]').click()}"`),
+  }),
+})}${button({
+  type: 'button',
+  variant: 'ghost',
+  testid: 'server-create',
+  label: tr(i, 'srv.createPick'),
+  attrs: html` hx-post="/settings/servers" hx-include="#srv [name=server_name], #srv [name=server_id]" hx-params="server_name,server_id" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`,
+})}</div>
 </div>`;
 }
 
@@ -288,12 +331,12 @@ const bindResult = (bind: BindResult) =>
   alert({ tone: bind.ok ? 'ok' : 'error', testid: 'bind-result', attrs: raw(` data-ok="${bind.ok ? 'true' : 'false'}"`), body: html`${bind.text}` });
 
 const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: BindResult | undefined) =>
-  html`<div class="flex max-w-3xl flex-col gap-3"><div class="flex flex-wrap gap-2"><form method="post" action="/settings/env/${id}/bind">${csrf}${button({
+  html`<div class="flex max-w-3xl flex-col gap-3"><div class="flex flex-wrap gap-2"><form method="post" action="/settings/env/${id}/bind#settings">${csrf}${button({
     variant: 'ghost',
     testid: 'env-bind-db',
     label: tr(i, 'settings.env.bind'),
   })}</form>
-<form method="post" action="/settings/env/${id}/token">${csrf}${button({ variant: 'ghost', label: tr(i, 'settings.env.reissue') })}</form></div>
+<form method="post" action="/settings/env/${id}/token#settings">${csrf}${button({ variant: 'ghost', label: tr(i, 'settings.env.reissue') })}</form></div>
 ${bind ? bindResult(bind) : ''}</div>`;
 
 const deployTokenBlock = (i: I18n, token: string) =>
@@ -307,7 +350,7 @@ export function envFormView(
   i: I18n,
   p: {
     values: EnvFormValues;
-    servers: { id: string; name: string }[];
+    serverBlock: Html;
     errors: Record<string, string>;
     csrf: string;
     isNew: boolean;
@@ -343,14 +386,13 @@ export function envFormView(
     p.deleteError ? alert({ tone: 'error', role: 'alert', testid: 'env-delete-error', body: html`${p.deleteError}` }) : '',
   ].filter(Boolean);
 
-  return html`<h1 class="${H1}">${tr(i, p.isNew ? 'settings.env.newTitle' : 'settings.env.editTitle')}</h1>
-<div class="mt-4 flex flex-col gap-4">
+  return html`<div class="flex flex-col gap-4">
 ${alerts.length ? html`<div class="flex max-w-3xl flex-col gap-3">${alerts}</div>` : ''}
-<form method="post" action="/settings/env" class="flex max-w-3xl flex-col gap-6">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
+<form method="post" action="/settings/env#settings" class="flex max-w-3xl flex-col gap-6">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
 ${section(tr(i, 'settings.sec.general'), html`${fld('name', text('name'))}
 ${fld('branch', text('branch'))}
 ${check('is_production', isProduction)}
-${fld('server_id', select({ name: 'server_id', id: 'f-server_id', current: v('server_id'), options: p.servers.map((s) => ({ value: s.id, label: s.name })) }))}
+<div class="flex flex-col gap-1.5 sm:col-span-2"><label for="f-server_id" class="${LABEL}">${label('server_id')}</label>${p.serverBlock}</div>
 ${fld('position', text('position', 'number'))}`)}
 ${section(tr(i, 'settings.sec.compose'), html`${fld('compose_project', text('compose_project'))}
 ${fld('compose_dir', text('compose_dir'))}
@@ -395,11 +437,10 @@ ${
     ? html`<section class="mt-8 flex max-w-3xl flex-col gap-3 rounded-xl border border-prod p-5"><h2 class="font-display text-base font-semibold text-prod">${tr(i, 'settings.env.dangerZone')}</h2><p class="text-sm text-mute">${tr(i, 'settings.env.deleteBody')}</p>${deleteDialog(i, {
         base: 'env-delete',
         suffix: '',
-        action: `/settings/env/${id}/delete`,
+        target: { action: `/settings/env/${id}/delete`, csrf },
         title: tr(i, 'settings.env.deleteTitle', { name: p.storedName ?? v('name') }),
         body: tr(i, 'settings.env.deleteBody'),
         expected: p.storedName ?? v('name'),
-        csrf,
       })}</section>`
     : ''
 }
