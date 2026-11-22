@@ -1,0 +1,124 @@
+<meta charset="utf-8">
+<title>Microrun activity feed v4</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@600;700&display=swap">
+<style>
+/*BASE*/
+/* Layout: problems first, then a cross-environment deploy feed beside a dense A–Z index of environments. */
+:root { --jump-top: 57px; }
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; padding-block: 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+.top-in { display: flex; align-items: center; gap: 14px; max-width: 1320px; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+.logo { font: 700 16px var(--f-mono); color: var(--ink); text-decoration: none; white-space: nowrap; }
+.logo i { color: var(--accent); font-style: normal; }
+.top .search { max-width: 440px; }
+.top .btn { white-space: nowrap; text-decoration: none; }
+.top .lang { margin-left: auto; }
+.feed li.sel a { background: var(--sunk); box-shadow: inset 3px 0 0 var(--accent); }
+@media (min-width: 1100px) { body:has(.drawer.open) .top { margin-right: 440px; } body:has(.drawer.open) .top-in { margin-right: 0; } }
+main { padding-block: 20px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1320px; margin: 0 auto; }
+h2.h { margin: 0 0 10px; font: 700 18px var(--f-display); display: flex; align-items: baseline; gap: 8px; }
+h2.h .cnt { font: 500 14px var(--f-sans); }
+.cols { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 28px; align-items: start; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chips button { border: 1px solid var(--line); background: var(--surface); border-radius: 999px; padding: 3px 11px; font-size: 13px; cursor: pointer; }
+.chips button[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+.feed { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); overflow: hidden; }
+.feed li { border-top: 1px solid var(--line); }
+.feed li:first-child { border-top: 0; }
+.feed a { display: grid; grid-template-columns: 74px minmax(0, 1fr) auto; gap: 4px 12px; padding: 9px 12px; color: inherit; text-decoration: none; align-items: baseline; }
+.feed a:hover { background: var(--sunk); }
+.feed .when { color: var(--mute); font-size: 12px; white-space: nowrap; }
+.feed .what { min-width: 0; overflow-wrap: anywhere; }
+.feed .env { font-weight: 600; }
+.feed .env.prod { color: var(--prod); }
+.feed .what small { display: block; color: var(--mute); font-size: 12px; }
+.idx-groups { display: flex; flex-direction: column; gap: 14px; }
+.idx h3 { margin: 0 0 4px; font-size: 13px; color: var(--mute); display: flex; justify-content: space-between; }
+.idx.prod h3 { color: var(--prod); }
+.idx ul { list-style: none; margin: 0; padding: 0; columns: 2 180px; column-gap: 16px; }
+.idx li { break-inside: avoid; }
+.idx a { display: flex; align-items: center; gap: 7px; padding: 3px 0; color: var(--ink); text-decoration: none; overflow: hidden; }
+.idx a span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.idx a:hover span:last-child { text-decoration: underline; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.dot.warn { background: var(--warn); } .dot.bad { background: var(--prod); } .dot.off { background: transparent; border: 2px solid var(--warn); }
+.empty { padding: 24px; text-align: center; color: var(--mute); border: 1px dashed var(--line); border-radius: 10px; }
+.back { display: inline-block; margin-bottom: 12px; text-decoration: none; }
+@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  :root { --jump-top: 108px; }
+  .top-in { flex-wrap: wrap; gap: 10px; } .top .search { order: 3; max-width: none; flex-basis: 100%; }
+  .top .btn { padding: 7px 12px; } .top .long { display: none; }
+  .feed a { grid-template-columns: minmax(0, 1fr) auto; } .feed .when { grid-column: 1 / -1; }
+}
+</style>
+<header class="top"><div class="top-in"><a class="logo" href="#"><i>▍</i>microrun</a><input class="search" id="q" type="search" aria-label="Search"><select class="lang" aria-label="Language"><option>English</option><option>Українська</option><option>Deutsch</option></select><a class="btn btn-primary" href="#" aria-label="New environment">New<span class="long">environment</span></a></div></header>
+<main id="app"></main>
+<aside class="drawer" id="drawer" aria-label="Release"></aside>
+<script>
+/*DATA*/
+(function () {
+  const { C, fmt, esc, issues, envs } = MR;
+  const { short, ago, num } = fmt;
+  const app = document.getElementById('app');
+  const drawer = document.getElementById('drawer');
+  const q = document.getElementById('q');
+  q.placeholder = C.search;
+  let stage = 'all';
+  let feedN = 25;
+  let selRel = null;
+  const STAGES = [['all', 'All'], ['prod', 'Production'], ['stage', 'Staging'], ['dev', 'Development'], ['preview', 'Previews']];
+  const match = (e, t) => !t || e.name.includes(t) || e.branch.includes(t) || e.releases.some((r) => r.sha.startsWith(t));
+  const toneOf = (e) => { const is = issues(e); return is.some((i) => i.tone === 'bad') ? 'bad' : !e.online ? 'off' : is.length ? 'warn' : ''; };
+
+  function feed(t) {
+    const rows = envs.filter((e) => (stage === 'all' || e.stage === stage) && match(e, t)).flatMap((e) => e.releases.slice(0, 30).map((r) => ({ e, r }))).sort((a, b) => b.r.at - a.r.at);
+    const vis = rows.slice(0, feedN);
+    return `<section><h2 class="h">Latest deploys</h2><div class="chips">${STAGES.map(([k, l]) => `<button type="button" data-st="${k}" aria-pressed="${stage === k}">${l}</button>`).join('')}</div>
+${vis.length ? `<ul class="feed">${vis.map(({ e, r }) => `<li><a href="#env-${e.id}" data-rel="${r.id}"><span class="when">${ago(r.at)}</span><span class="what"><span class="env${e.stage === 'prod' ? ' prod' : ''}">${esc(e.name)}</span> <span class="sha">${short(r.sha)}</span> ${esc(r.message)}<small>${esc(r.author)}${r.diff.length ? ' · schema change' : ''}</small></span><span class="badge s-${r.state}">${C.state[r.state]}</span></a></li>`).join('')}</ul>
+${rows.length > feedN ? `<button class="btn btn-ghost more" type="button" id="feed-more">Show 25 more<span class="p-meta">${num(rows.length - feedN)} not shown</span></button>` : ''}` : `<p class="empty">${C.noMatch(esc(t))}</p>`}</section>`;
+  }
+
+  function index(t) {
+    const groups = [['prod', 'Production'], ['stage', 'Staging'], ['dev', 'Development'], ['preview', 'Previews']];
+    const list = envs.filter((e) => match(e, t));
+    return `<section><h2 class="h">All environments <span class="cnt num">${list.length}</span></h2><div class="idx-groups">${groups.map(([k, l]) => {
+      const es = list.filter((e) => e.stage === k).sort((a, b) => a.name.localeCompare(b.name));
+      return es.length ? `<div class="idx ${k}"><h3><span>${l}</span><span class="num">${es.length}</span></h3><ul>${es.map((e) => `<li><a href="#env-${e.id}"><span class="dot ${toneOf(e)}"></span><span>${esc(e.name)}</span></a></li>`).join('')}</ul></div>` : '';
+    }).join('') || `<p class="empty">${C.noMatch(esc(t))}</p>`}</div></section>`;
+  }
+
+  function home() {
+    const t = q.value.trim().toLowerCase();
+    app.innerHTML = `<div class="cols">${feed(t)}${index(t)}</div>`;
+    app.querySelectorAll('[data-st]').forEach((b) => (b.onclick = () => { stage = b.dataset.st; feedN = 25; home(); }));
+    app.querySelector('#feed-more')?.addEventListener('click', () => { feedN += 25; home(); });
+    app.querySelectorAll('.feed [data-rel]').forEach((a) => {
+      if (a.dataset.rel === selRel) a.parentElement.classList.add('sel');
+      a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        selRel = a.dataset.rel;
+        app.querySelectorAll('.feed li.sel').forEach((x) => x.classList.remove('sel'));
+        a.parentElement.classList.add('sel');
+        const e = envs.find((x) => x.releases.some((r) => r.id === selRel));
+        MR.openPanel(drawer, e, e.releases.find((r) => r.id === selRel), home, () => { selRel = null; app.querySelectorAll('.feed li.sel').forEach((x) => x.classList.remove('sel')); });
+      });
+    });
+  }
+
+  function route() {
+    MR.closePanel(drawer);
+    const h = location.hash.slice(1);
+    const e = h.startsWith('env-') && envs.find((x) => x.id === h.slice(4));
+    if (e) MR.mountEnv(app, e, { top: '<a class="back" href="#">← Overview</a>', onRelease: (env, r, redraw) => MR.openPanel(drawer, env, r, redraw) });
+    else home();
+    window.scrollTo(0, 0);
+  }
+  q.addEventListener('input', () => { if (location.hash) location.hash = ''; else home(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') MR.closePanel(drawer); if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); } });
+  window.addEventListener('hashchange', route);
+  route();
+})();
+</script>

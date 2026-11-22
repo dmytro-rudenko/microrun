@@ -1,0 +1,138 @@
+<meta charset="utf-8">
+<title>Microrun deploy matrix</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&family=Space+Grotesk:wght@600;700&display=swap">
+<style>
+/*BASE*/
+/* Layout: project rows × stage columns; production column marked red; previews fold into one cell per project. */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10; display: flex; align-items: center; gap: 14px; padding: 10px max(16px, env(safe-area-inset-right, 0px)) 10px max(16px, env(safe-area-inset-left, 0px)); background: var(--surface); border-bottom: 1px solid var(--line); }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--surface); }
+.logo { font: 700 16px var(--f-mono); color: var(--ink); text-decoration: none; white-space: nowrap; }
+.logo i { color: var(--accent); font-style: normal; }
+.top .search { max-width: 440px; }
+.top .btn { margin-left: auto; white-space: nowrap; text-decoration: none; }
+:root { --jump-top: 57px; }
+main { padding-block: 20px 48px; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); max-width: 1320px; margin: 0 auto; }
+.lede { margin: 0 0 16px; color: var(--mute); }
+.lede b { color: var(--ink); font-weight: 600; }
+.attn { margin: 0 0 22px; border: 1px solid var(--line); border-left: 4px solid var(--warn); border-radius: 10px; background: var(--surface); }
+.attn h2 { margin: 0; padding: 10px 14px 4px; font-size: 14px; }
+.attn ul { list-style: none; margin: 0; padding: 0 0 6px; }
+.attn li { display: flex; flex-wrap: wrap; gap: 4px 10px; padding: 6px 14px; align-items: baseline; }
+.attn li a { font-weight: 600; text-decoration: none; }
+.attn .t-warn { color: var(--warn); } .attn .t-bad { color: var(--prod); } .attn .t-info { color: var(--mute); }
+.attn details summary { cursor: pointer; color: var(--mute); font-size: 13px; }
+.attn details p { margin: 4px 0 0; font-size: 13px; }
+.mx { width: 100%; border-collapse: separate; border-spacing: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; table-layout: fixed; }
+.mx th { text-align: left; font-size: 12px; font-weight: 600; color: var(--mute); padding: 10px 12px; border-bottom: 1px solid var(--line); background: var(--sunk); }
+.mx th.c-prod { color: var(--prod); box-shadow: inset 0 3px 0 var(--prod); }
+.mx col.proj { width: 15%; } .mx col.prev { width: 16%; }
+.mx td { padding: 0; border-bottom: 1px solid var(--line); vertical-align: top; }
+.mx tr:last-child td { border-bottom: 0; }
+.mx td.c-prod { background: linear-gradient(90deg, var(--prod-soft), transparent 6px); }
+.mx td.pname { padding: 12px; font: 600 15px var(--f-display); }
+.cell { display: block; padding: 10px 12px; color: inherit; text-decoration: none; min-width: 0; border-left: 1px solid var(--line); height: 100%; }
+.cell:hover { background: var(--sunk); }
+.cell .ln1 { display: flex; align-items: center; gap: 7px; }
+.cell .msg { display: block; color: var(--mute); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cell .ln3 { display: flex; flex-wrap: wrap; gap: 2px 8px; font-size: 12px; color: var(--mute); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); flex: none; }
+.dot.warn { background: var(--warn); } .dot.bad { background: var(--prod); } .dot.off { background: transparent; border: 2px solid var(--warn); }
+.flag { font-size: 12px; font-weight: 600; color: var(--warn); }
+.flag.bad { color: var(--prod); }
+.hit { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.prev-btn { width: 100%; text-align: left; border: 0; border-left: 1px solid var(--line); background: none; padding: 10px 12px; cursor: pointer; }
+.prev-btn:hover { background: var(--sunk); }
+.prev-btn small { display: block; color: var(--mute); font-size: 12px; }
+.prev-row td { background: var(--bg); }
+.prev-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; padding: 10px 12px; }
+.prev-list .cell { border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.empty { padding: 28px; text-align: center; color: var(--mute); background: var(--surface); border: 1px dashed var(--line); border-radius: 12px; }
+.back { display: inline-block; margin-bottom: 12px; text-decoration: none; }
+@media (max-width: 760px) {
+  :root { --jump-top: 104px; }
+  .top { flex-wrap: wrap; } .top .search { order: 3; max-width: none; flex-basis: 100%; }
+  .mx, .mx tbody, .mx tr, .mx td { display: block; width: 100%; } .mx thead, .mx colgroup { display: none; }
+  .mx { border: 0; background: none; }
+  .mx tr.proj-row { margin-bottom: 12px; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: var(--surface); }
+  .mx td { border-bottom: 1px solid var(--line); }
+  .mx td[data-label]::before { content: attr(data-label); display: block; padding: 8px 12px 0; font-size: 12px; font-weight: 600; color: var(--mute); }
+  .mx td.c-prod[data-label]::before { color: var(--prod); }
+  .cell, .prev-btn { border-left: 0; }
+  .prev-row { margin: -12px 0 12px; }
+}
+</style>
+<header class="top"><a class="logo" href="#"><i>▍</i>microrun</a><input class="search" id="q" type="search" placeholder="" aria-label="Search"><a class="btn btn-primary" href="#">New environment</a><select class="lang" aria-label="Language"><option>English</option><option>Українська</option><option>Deutsch</option></select></header>
+<main id="app"></main>
+<aside class="drawer" id="drawer" aria-label="Release"></aside>
+<script>
+/*DATA*/
+(function () {
+  const { C, fmt, esc, issues, envs } = MR;
+  const { short, ago, num } = fmt;
+  const app = document.getElementById('app');
+  const drawer = document.getElementById('drawer');
+  const q = document.getElementById('q');
+  q.placeholder = C.search;
+  const open = new Set();
+  const projects = [...new Set(envs.map((e) => e.project))];
+  const byStage = (p, s) => envs.filter((e) => e.project === p && e.stage === s);
+
+  const match = (e, t) => !t || e.name.includes(t) || e.branch.includes(t) || e.releases.some((r) => r.sha.startsWith(t));
+
+  function cell(e, t) {
+    if (!e) return '<span class="cell p-meta">—</span>';
+    const is = issues(e);
+    const a = e.active;
+    const tone = is.some((i) => i.tone === 'bad') ? 'bad' : !e.online ? 'off' : is.length ? 'warn' : '';
+    return `<a class="cell${t && match(e, t) ? ' hit' : ''}" href="#env-${e.id}"><span class="ln1"><span class="dot ${tone}"></span><span class="sha">${a ? short(a.sha) : '—'}</span><span class="p-meta">${a ? ago(a.at) : ''}</span></span>
+<span class="msg">${a ? esc(a.message) : C.noReleases}</span>
+<span class="ln3">${is.map((i) => `<span class="flag ${i.tone === 'bad' ? 'bad' : ''}">${i.text}</span>`).join('') || (e.rollbackable ? `<span>${e.rollbackable} to roll back</span>` : '<span>nothing to roll back</span>')}</span></a>`;
+  }
+
+  function attention() {
+    const offline = envs.filter((e) => !e.online);
+    const rows = envs.flatMap((e) => issues(e).filter((i) => i.kind !== 'offline').map((i) => ({ e, i })));
+    const srv = [...new Set(offline.map((e) => e.server))];
+    if (!rows.length && !srv.length) return '';
+    return `<section class="attn"><h2>Needs attention</h2><ul>
+${srv.map((s) => `<li><span class="t-warn">● Server ${s} is offline.</span> ${offline.length} environments on it can’t deploy or roll back.<details><summary>Show environments</summary><p>${offline.filter((e) => e.server === s).map((e) => `<a href="#env-${e.id}">${esc(e.name)}</a>`).join(', ')}</p></details></li>`).join('')}
+${rows.map(({ e, i }) => `<li><a href="#env-${e.id}">${esc(e.name)}</a><span class="t-${i.tone}">${i.text}</span></li>`).join('')}</ul></section>`;
+  }
+
+  function home() {
+    const t = q.value.trim().toLowerCase();
+    const list = projects.filter((p) => envs.some((e) => e.project === p && match(e, t)));
+    const lede = `<p class="lede"><b>${envs.length} environments</b> grouped by name into ${projects.length} projects, on ${MR.servers.length} servers · ${num(MR.total)} releases</p>`;
+    if (!list.length) { app.innerHTML = `${lede}<div class="empty">${C.noMatch(esc(t))}<br><br><button class="btn btn-ghost" id="clr">${C.clearSearch}</button></div>`; app.querySelector('#clr').onclick = () => { q.value = ''; home(); }; return; }
+    app.innerHTML = `${lede}${t ? '' : attention()}<table class="mx"><colgroup><col class="proj"><col><col><col><col class="prev"></colgroup>
+<thead><tr><th>Project</th><th class="c-prod">Production</th><th>Staging</th><th>Development</th><th>Previews</th></tr></thead><tbody>
+${list.map((p) => {
+  const pv = byStage(p, 'preview');
+  const pvOpen = open.has(p) || (t && pv.some((e) => match(e, t)));
+  return `<tr class="proj-row"><td class="pname">${esc(p)}</td><td class="c-prod" data-label="Production">${cell(byStage(p, 'prod')[0], t)}</td><td data-label="Staging">${cell(byStage(p, 'stage')[0], t)}</td><td data-label="Development">${cell(byStage(p, 'dev')[0], t)}</td>
+<td data-label="Previews">${pv.length ? `<button class="prev-btn" data-p="${p}" aria-expanded="${!!pvOpen}">${pv.length} preview${pv.length > 1 ? 's' : ''} ${pvOpen ? '▴' : '▾'}<small>${pv.filter((e) => issues(e).length).length ? `${pv.filter((e) => issues(e).length).length} need attention` : `latest ${ago(Math.max(...pv.map((e) => e.last.at)))}`}</small></button>` : '<span class="cell p-meta">none</span>'}</td></tr>
+${pvOpen ? `<tr class="prev-row"><td colspan="5"><div class="prev-list">${pv.map((e) => `<div>${cell(e, t).replace('<span class="ln1">', `<span class="ln1"><b>${esc(e.name.replace(p + '-', ''))}</b>`)}</div>`).join('')}</div></td></tr>` : ''}`;
+}).join('')}</tbody></table>`;
+    app.querySelectorAll('.prev-btn').forEach((b) => b.addEventListener('click', () => { const p = b.dataset.p; open.has(p) ? open.delete(p) : open.add(p); home(); }));
+  }
+
+  function envPage(id) {
+    const e = envs.find((x) => x.id === id);
+    if (!e) return home();
+    const draw = MR.mountEnv(app, e, { top: '<a class="back" href="#">← All environments</a>', onRelease: (env, r, redraw) => MR.openPanel(drawer, env, r, redraw) });
+  }
+
+  function route() {
+    MR.closePanel(drawer);
+    const h = location.hash.slice(1);
+    h.startsWith('env-') ? envPage(h.slice(4)) : home();
+    window.scrollTo(0, 0);
+  }
+  q.addEventListener('input', () => { if (location.hash) location.hash = ''; else home(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') MR.closePanel(drawer); if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); } });
+  window.addEventListener('hashchange', route);
+  route();
+})();
+</script>
