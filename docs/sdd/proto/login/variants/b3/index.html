@@ -1,0 +1,102 @@
+<meta charset="utf-8">
+<title>microrun вхід B3</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: { bg:'var(--bg)', surface:'var(--surface)', field:'var(--field)', ink:'var(--ink)', mute:'var(--mute)', line:'var(--line)', accent:'var(--accent)', 'on-accent':'var(--on-accent)', prod:'var(--prod)', 'prod-soft':'var(--prod-soft)' },
+  fontFamily: { sans:['Inter','system-ui','sans-serif'], display:['"Space Grotesk"','Inter','system-ui','sans-serif'], mono:['"JetBrains Mono"','ui-monospace','monospace'] },
+} } };
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Narrow 40% console panel: server rack SVG + streaming deploy log; open form area on the right */
+:root{--bg:#f6f7f9;--surface:#fff;--field:#fff;--ink:#1b1f24;--mute:#606a77;--line:#d4d9e0;--accent:#2f6feb;--on-accent:#fff;--ring:rgba(47,111,235,.22);--prod:#c62828;--prod-soft:#fdecea;
+  --c-bg:#0b1016;--c-ink:#d8e1ec;--c-mute:#6f7d8f;--c-line:#1e2834;--c-ok:#3fb950;--c-acc:#58a6ff;--c-warn:#d29922}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161d;--surface:#161c23;--field:#0f1419;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--c-bg:#070a0e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11161d;--surface:#161c23;--field:#0f1419;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--c-bg:#070a0e;color-scheme:dark}
+body{background:var(--bg);color:var(--ink)}
+.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--ring)}
+.led{animation:blink 1.6s steps(2) infinite}.led:nth-child(2n){animation-delay:.4s}.led:nth-child(3n){animation-delay:.9s}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.led{animation:none}}
+#log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+
+<div class="min-h-screen flex font-sans">
+  <aside class="hidden lg:flex w-[42%] max-w-[560px] flex-col gap-10 p-10 bg-[color:var(--c-bg)] text-[color:var(--c-ink)] border-r border-[color:var(--c-line)]">
+    <div class="flex items-center gap-2.5 font-mono text-[15px]"><span class="text-[color:var(--c-acc)]">▍</span>microrun</div>
+
+    <svg viewBox="0 0 360 220" class="w-full" role="img" aria-label="Сервер з трьома середовищами">
+      <g fill="none" stroke="var(--c-line)" stroke-width="1.5">
+        <rect x="20" y="10" width="320" height="56" rx="8" fill="#0f1620"/>
+        <rect x="20" y="82" width="320" height="56" rx="8" fill="#0f1620"/>
+        <rect x="20" y="154" width="320" height="56" rx="8" fill="#1a1013" stroke="#5a2a2e"/>
+      </g>
+      <g font-family="JetBrains Mono, monospace" font-size="12">
+        <text x="40" y="43" fill="var(--c-ink)">dev</text><text x="40" y="115" fill="var(--c-ink)">stage</text><text x="40" y="187" fill="#ff8a8a">prod</text>
+        <text x="96" y="43" fill="var(--c-mute)">feature/billing</text><text x="96" y="115" fill="var(--c-mute)">main</text><text x="96" y="187" fill="var(--c-mute)">v1.8.2</text>
+        <text x="282" y="43" fill="var(--c-mute)" text-anchor="end">a3f9c21</text><text x="282" y="115" fill="var(--c-mute)" text-anchor="end">7be04d8</text><text x="282" y="187" fill="var(--c-mute)" text-anchor="end">19c6e5a</text>
+      </g>
+      <g><circle class="led" cx="316" cy="38" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="38" r="4" fill="var(--c-ok)"/>
+         <circle class="led" cx="316" cy="110" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="110" r="4" fill="var(--c-warn)"/>
+         <circle class="led" cx="316" cy="182" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="182" r="4" fill="var(--c-ok)"/></g>
+    </svg>
+
+    <div id="log" class="font-mono text-[12px] leading-6 text-[color:var(--c-mute)] min-w-0" aria-hidden="true"></div>
+
+    <div class="mt-auto">
+      <h2 class="font-display text-2xl font-bold text-[color:var(--c-ink)] [text-wrap:balance]" data-i="tag">Deploy without SSH or YAML on the server.</h2>
+      <p class="mt-2 text-sm text-[color:var(--c-mute)]" data-i="sub">The microrun agent runs your environments and shows what is live in each one.</p>
+    </div>
+  </aside>
+
+  <main class="relative flex-1 flex items-center justify-center py-12" style="padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))">
+    <form id="langf" class="absolute top-4 right-4 sm:top-6 sm:right-6 flex items-center gap-2" style="margin-right:env(safe-area-inset-right,0px)">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" class="text-mute" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.7 3.8 5.7 3.8 9s-1.3 6.3-3.8 9c-2.5-2.7-3.8-5.7-3.8-9S9.5 5.7 12 3z"/></svg>
+      <select id="lang" name="lang" aria-label="Language" class="inp rounded-md border border-line bg-field py-1.5 pl-2.5 pr-8 text-sm text-ink transition">
+        <option value="en" selected>English</option><option value="uk">Українська</option><option value="de">Deutsch</option><option value="fr">Français</option><option value="es">Español</option><option value="pt-BR">Português (Brasil)</option><option value="pl">Polski</option><option value="zh-CN">简体中文</option>
+      </select>
+    </form>
+    <div class="w-full max-w-[400px]">
+      <div class="lg:hidden font-mono mb-8"><span class="text-accent">▍</span>microrun</div>
+      <h1 class="font-display text-3xl font-bold" data-i="title">Sign in</h1>
+      <form id="f" class="mt-8 flex flex-col gap-6" novalidate>
+        <div id="err" hidden role="alert" class="[&:not([hidden])]:flex gap-3 rounded-lg border-l-4 border-prod bg-prod-soft px-4 py-3 text-sm"><span class="font-semibold text-prod">!</span><span data-i="error">Invalid username or password.</span></div>
+        <div class="flex flex-col gap-1.5">
+          <label for="username" class="text-xs font-semibold uppercase tracking-wider text-mute" data-i="user">Username</label>
+          <input id="username" autocomplete="username" required class="inp block w-full rounded-md border border-line bg-field px-4 py-3 text-[15px] text-ink transition">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label for="password" class="text-xs font-semibold uppercase tracking-wider text-mute" data-i="pass">Password</label>
+          <div class="relative">
+            <input id="password" type="password" autocomplete="current-password" required class="inp block w-full rounded-md border border-line bg-field px-4 py-3 pr-12 text-[15px] text-ink transition">
+            <button type="button" id="eye" aria-label="Show password" class="absolute inset-y-0 right-0 flex items-center px-3 text-mute hover:text-ink focus:outline-none focus-visible:text-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <button class="rounded-md bg-accent px-5 py-3 text-[15px] font-semibold text-on-accent hover:opacity-90 focus:outline-none focus:ring-4 focus:ring-[color:var(--ring)]" data-i="submit">Sign in</button>
+        <p class="text-xs text-mute">Demo: password <code class="font-mono">demo</code> succeeds, anything else shows the error.</p>
+      </form>
+    </div>
+  </main>
+</div>
+<script>
+const T={
+en:{title:'Sign in',user:'Username',pass:'Password',submit:'Sign in',error:'Invalid username or password.',tag:'Deploy without SSH or YAML on the server.',sub:'The microrun agent runs your environments and shows what is live in each one.'},
+uk:{title:'Вхід',user:'Логін',pass:'Пароль',submit:'Увійти',error:'Невірний логін або пароль.',tag:'Деплой без SSH і без YAML на сервері.',sub:'Агент microrun тримає ваші середовища й показує, що в них зараз працює.'},
+de:{title:'Anmelden',user:'Benutzername',pass:'Passwort',submit:'Anmelden',error:'Benutzername oder Passwort ist falsch.',tag:'Deployen ohne SSH und ohne YAML auf dem Server.',sub:'Der microrun-Agent betreibt Ihre Umgebungen und zeigt, was in jeder gerade läuft.'},
+fr:{title:'Connexion',user:"Nom d'utilisateur",pass:'Mot de passe',submit:'Se connecter',error:"Nom d'utilisateur ou mot de passe incorrect.",tag:'Déployez sans SSH ni YAML sur le serveur.',sub:"L'agent microrun gère vos environnements et montre ce qui tourne dans chacun."},
+es:{title:'Iniciar sesión',user:'Usuario',pass:'Contraseña',submit:'Entrar',error:'Usuario o contraseña incorrectos.',tag:'Despliega sin SSH ni YAML en el servidor.',sub:'El agente de microrun ejecuta tus entornos y muestra qué corre en cada uno.'},
+'pt-BR':{title:'Entrar',user:'Usuário',pass:'Senha',submit:'Entrar',error:'Usuário ou senha inválidos.',tag:'Deploy sem SSH e sem YAML no servidor.',sub:'O agente microrun executa seus ambientes e mostra o que está rodando em cada um.'},
+pl:{title:'Logowanie',user:'Login',pass:'Hasło',submit:'Zaloguj',error:'Nieprawidłowy login lub hasło.',tag:'Wdrażaj bez SSH i bez YAML na serwerze.',sub:'Agent microrun utrzymuje Twoje środowiska i pokazuje, co w każdym z nich działa.'},
+'zh-CN':{title:'登录',user:'用户名',pass:'密码',submit:'登录',error:'用户名或密码错误。',tag:'无需 SSH，服务器上也无需 YAML 即可部署。',sub:'microrun 代理运行你的环境，并显示每个环境中正在运行的内容。'}};
+document.getElementById('lang').addEventListener('change',e=>{const l=e.target.value,d=T[l];document.documentElement.lang=l;document.querySelectorAll('[data-i]').forEach(n=>n.textContent=d[n.dataset.i]);});
+const lines=[['c-mute','12:04:11','pull ghcr.io/acme/web:a3f9c21'],['c-mute','12:04:19','start web-dev · port 3011'],['c-ok','12:04:21','healthcheck ok · dev'],['c-acc','12:05:02','release 7be04d8 → stage'],['c-ok','12:05:09','swap complete · stage'],['c-warn','12:06:40','cleanup: 4 images, 1.2 GB'],['c-ok','12:07:15','prod v1.8.2 · 3 replicas healthy']];
+const log=document.getElementById('log');let k=0;
+function push(){const [c,t,m]=lines[k++%lines.length];const d=document.createElement('div');d.innerHTML=`<span>${t}</span>  <span style="color:var(--${c})">${m}</span>`;log.append(d);while(log.children.length>5)log.firstChild.remove();}
+for(let n=0;n<5;n++)push();if(!matchMedia('(prefers-reduced-motion:reduce)').matches)setInterval(push,1800);
+document.getElementById('eye').onclick=()=>{const p=document.getElementById('password');p.type=p.type==='password'?'text':'password';};
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const f=e.target,ins=[...f.querySelectorAll('input')],err=document.getElementById('err');
+  ins.forEach(i=>i.classList.toggle('!border-prod',!i.value));if(ins.some(i=>!i.value))return;
+  const bad=password.value!=='demo';err.hidden=!bad;password.classList.toggle('!border-prod',bad);if(!bad)f.querySelector('button:not([type])').textContent='✓';});
+</script>

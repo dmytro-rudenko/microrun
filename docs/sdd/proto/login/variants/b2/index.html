@@ -1,0 +1,86 @@
+<meta charset="utf-8">
+<title>microrun вхід B2</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script>
+tailwind.config = { theme: { extend: {
+  colors: { bg:'var(--bg)', surface:'var(--surface)', field:'var(--field)', ink:'var(--ink)', mute:'var(--mute)', line:'var(--line)', accent:'var(--accent)', 'on-accent':'var(--on-accent)', prod:'var(--prod)', 'prod-soft':'var(--prod-soft)' },
+  fontFamily: { sans:['Inter','system-ui','sans-serif'], display:['"Space Grotesk"','Inter','system-ui','sans-serif'], mono:['"JetBrains Mono"','ui-monospace','monospace'] },
+} } };
+</script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Space+Grotesk:wght@500;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Narrow 40% console panel: server rack SVG + streaming deploy log; open form area on the right */
+:root{--bg:#f6f7f9;--surface:#fff;--field:#fff;--ink:#1b1f24;--mute:#606a77;--line:#d4d9e0;--accent:#2f6feb;--on-accent:#fff;--ring:rgba(47,111,235,.22);--prod:#c62828;--prod-soft:#fdecea;
+  --c-bg:#0b1016;--c-ink:#d8e1ec;--c-mute:#6f7d8f;--c-line:#1e2834;--c-ok:#3fb950;--c-acc:#58a6ff;--c-warn:#d29922}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#11161d;--surface:#161c23;--field:#0f1419;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--c-bg:#070a0e;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#11161d;--surface:#161c23;--field:#0f1419;--ink:#e6edf3;--mute:#8b949e;--line:#2d3640;--accent:#58a6ff;--on-accent:#04121f;--ring:rgba(88,166,255,.25);--prod:#ff6b6b;--prod-soft:rgba(255,107,107,.12);--c-bg:#070a0e;color-scheme:dark}
+body{background:var(--bg);color:var(--ink)}
+.inp:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 4px var(--ring)}
+.led{animation:blink 1.6s steps(2) infinite}.led:nth-child(2n){animation-delay:.4s}.led:nth-child(3n){animation-delay:.9s}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.led{animation:none}}
+#log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+</style>
+
+<div class="min-h-screen flex font-sans">
+  <aside class="hidden lg:flex w-[42%] max-w-[560px] flex-col gap-10 p-10 bg-[color:var(--c-bg)] text-[color:var(--c-ink)] border-r border-[color:var(--c-line)]">
+    <div class="flex items-center gap-2.5 font-mono text-[15px]"><span class="text-[color:var(--c-acc)]">▍</span>microrun</div>
+
+    <svg viewBox="0 0 360 220" class="w-full" role="img" aria-label="Сервер з трьома середовищами">
+      <g fill="none" stroke="var(--c-line)" stroke-width="1.5">
+        <rect x="20" y="10" width="320" height="56" rx="8" fill="#0f1620"/>
+        <rect x="20" y="82" width="320" height="56" rx="8" fill="#0f1620"/>
+        <rect x="20" y="154" width="320" height="56" rx="8" fill="#1a1013" stroke="#5a2a2e"/>
+      </g>
+      <g font-family="JetBrains Mono, monospace" font-size="12">
+        <text x="40" y="43" fill="var(--c-ink)">dev</text><text x="40" y="115" fill="var(--c-ink)">stage</text><text x="40" y="187" fill="#ff8a8a">prod</text>
+        <text x="96" y="43" fill="var(--c-mute)">feature/billing</text><text x="96" y="115" fill="var(--c-mute)">main</text><text x="96" y="187" fill="var(--c-mute)">v1.8.2</text>
+        <text x="282" y="43" fill="var(--c-mute)" text-anchor="end">a3f9c21</text><text x="282" y="115" fill="var(--c-mute)" text-anchor="end">7be04d8</text><text x="282" y="187" fill="var(--c-mute)" text-anchor="end">19c6e5a</text>
+      </g>
+      <g><circle class="led" cx="316" cy="38" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="38" r="4" fill="var(--c-ok)"/>
+         <circle class="led" cx="316" cy="110" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="110" r="4" fill="var(--c-warn)"/>
+         <circle class="led" cx="316" cy="182" r="4" fill="var(--c-ok)"/><circle class="led" cx="302" cy="182" r="4" fill="var(--c-ok)"/></g>
+    </svg>
+
+    <div id="log" class="font-mono text-[12px] leading-6 text-[color:var(--c-mute)] min-w-0" aria-hidden="true"></div>
+
+    <div class="mt-auto">
+      <h2 class="font-display text-2xl font-bold text-[color:var(--c-ink)] [text-wrap:balance]">Деплой без SSH і без YAML на сервері.</h2>
+      <p class="mt-2 text-sm text-[color:var(--c-mute)]">Агент microrun тримає ваші середовища й показує, що в них зараз крутиться.</p>
+    </div>
+  </aside>
+
+  <main class="flex-1 flex items-center justify-center py-12" style="padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))">
+    <div class="w-full max-w-[400px]">
+      <div class="lg:hidden font-mono mb-8"><span class="text-accent">▍</span>microrun</div>
+      <h1 class="font-display text-3xl font-bold">Вхід</h1>
+      <form id="f" class="mt-8 flex flex-col gap-6" novalidate>
+        <div id="err" hidden role="alert" class="[&:not([hidden])]:flex gap-3 rounded-lg border-l-4 border-prod bg-prod-soft px-4 py-3 text-sm"><span class="font-semibold text-prod">!</span>Невірний логін або пароль.</div>
+        <div class="flex flex-col gap-1.5">
+          <label for="username" class="text-xs font-semibold uppercase tracking-wider text-mute">Логін</label>
+          <input id="username" autocomplete="username" required class="inp block w-full rounded-md border border-line bg-field px-4 py-3 text-[15px] text-ink transition">
+        </div>
+        <div class="flex flex-col gap-1.5">
+          <label for="password" class="text-xs font-semibold uppercase tracking-wider text-mute">Пароль</label>
+          <div class="relative">
+            <input id="password" type="password" autocomplete="current-password" required class="inp block w-full rounded-md border border-line bg-field px-4 py-3 pr-12 text-[15px] text-ink transition">
+            <button type="button" id="eye" aria-label="Показати пароль" class="absolute inset-y-0 right-0 flex items-center px-3 text-mute hover:text-ink focus:outline-none focus-visible:text-accent"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg></button>
+          </div>
+        </div>
+        <button class="rounded-md bg-accent px-5 py-3 text-[15px] font-semibold text-on-accent hover:opacity-90 focus:outline-none focus:ring-4 focus:ring-[color:var(--ring)]">Увійти</button>
+        <p class="text-xs text-mute">Демо: пароль <code class="font-mono">demo</code> — успіх, інший — помилка.</p>
+      </form>
+    </div>
+  </main>
+</div>
+<script>
+const lines=[['c-mute','12:04:11','pull ghcr.io/acme/web:a3f9c21'],['c-mute','12:04:19','start web-dev · port 3011'],['c-ok','12:04:21','healthcheck ok · dev'],['c-acc','12:05:02','release 7be04d8 → stage'],['c-ok','12:05:09','swap complete · stage'],['c-warn','12:06:40','cleanup: 4 images, 1.2 GB'],['c-ok','12:07:15','prod v1.8.2 · 3 replicas healthy']];
+const log=document.getElementById('log');let k=0;
+function push(){const [c,t,m]=lines[k++%lines.length];const d=document.createElement('div');d.innerHTML=`<span>${t}</span>  <span style="color:var(--${c})">${m}</span>`;log.append(d);while(log.children.length>5)log.firstChild.remove();}
+for(let n=0;n<5;n++)push();if(!matchMedia('(prefers-reduced-motion:reduce)').matches)setInterval(push,1800);
+document.getElementById('eye').onclick=()=>{const p=document.getElementById('password');p.type=p.type==='password'?'text':'password';};
+document.getElementById('f').addEventListener('submit',e=>{e.preventDefault();const f=e.target,ins=[...f.querySelectorAll('input')],err=document.getElementById('err');
+  ins.forEach(i=>i.classList.toggle('!border-prod',!i.value));if(ins.some(i=>!i.value))return;
+  const bad=password.value!=='demo';err.hidden=!bad;password.classList.toggle('!border-prod',bad);if(!bad)f.querySelector('button:not([type])').textContent='Вхід виконано ✓';});
+</script>
