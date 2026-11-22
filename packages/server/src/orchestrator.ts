@@ -1,6 +1,5 @@
 import { randomUUID } from 'node:crypto';
 import {
-  closeWindow as windowToClose,
   decideDeploy,
   nextContract,
   onDeploySuccess,
@@ -268,32 +267,6 @@ export class Orchestrator {
       });
       await r.updateOperation(approve.id, { finishedAt: now });
     });
-  }
-
-  async closeWindow(releaseId: string): Promise<Accepted> {
-    const rel = await this.repo.getRelease(releaseId);
-    if (!rel) throw new Error(`no release ${releaseId}`);
-    const env = (await this.repo.getEnv(rel.envId))!;
-    const now = this.now();
-    const base = { env: env.name, sha: sha7(rel.commitSha) };
-    const rs = await this.repo.listReleases(env.id);
-    const expire = windowToClose(rs, rel.id);
-    const after = applyPatches(rs, expire.map((id) => ({ id, patch: { state: 'expired' } })));
-    const contract = env.contractCmd && rel.contractedAt === null && nextContract(after) === rel.id;
-    try {
-      const op = await this.repo.tx(async (r) => {
-        await r.patchReleases(expire.map((id) => ({ id, patch: { state: 'expired' as const } })));
-        return r.createOperation({
-          envId: env.id, kind: contract ? 'contract' : 'expire', fromReleaseId: rel.id, toReleaseId: rel.id, actor: 'admin',
-          status: 'pending', params: base, startedAt: now,
-        });
-      });
-      this.start(op.id);
-      return { operationId: op.id };
-    } catch (e) {
-      if (e instanceof BusyError) return rejected('ENV_BUSY', base);
-      throw e;
-    }
   }
 
   async runContract(releaseId: string): Promise<void> {

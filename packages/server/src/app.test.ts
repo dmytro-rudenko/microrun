@@ -641,47 +641,12 @@ describe('UI routes', () => {
     });
   });
 
-  describe('POST /close-window', () => {
-    it('expires the older available releases and answers the panel of the closed one', async () => {
-      await deploy(A);
-      await deploy(B);
-      const relB = await release(B);
-      const res = await post('/close-window', { releaseId: relB.id });
-      expect(res.statusCode, res.body).toBe(200);
-      expect(res.body).toContain(`data-release="${relB.id}"`);
-      expect((await release(A)).state).toBe('expired');
-      expect((await release(B)).state).toBe('active');
-      expect((await ops()).find((o) => o.kind === 'expire')).toMatchObject({ actor: 'admin', status: 'succeeded', toReleaseId: relB.id });
-    });
-
-    it('starts the contract of the release whose window it closes when that release is next to contract', async () => {
-      await deploy(A);
-      await deploy(B);
-      const relA = await release(A);
-      expect((await post('/close-window', { releaseId: relA.id })).statusCode).toBe(200);
-      const contract = (await ops()).find((o) => o.kind === 'contract')!;
-      expect(contract).toMatchObject({ actor: 'admin', toReleaseId: relA.id });
-      expect((await settle(contract.id)).status).toBe('succeeded');
-      expect((await release(A)).contractedAt).not.toBeNull();
-    });
-
-    it('answers 422 for an unknown release', async () => {
-      const res = await post('/close-window', { releaseId: 'nope' });
-      expect(res.statusCode).toBe(422);
-      expect(await ops()).toEqual([]);
-    });
-
-    it('answers 409 with the ENV_BUSY alert while another operation runs and expires nothing', async () => {
-      await deploy(A);
-      await deploy(B);
-      const free = await busy();
-      const res = await post('/close-window', { releaseId: (await release(A)).id });
-      expect(res.statusCode, res.body).toBe(409);
-      expect(res.body).toContain('role="alert"');
-      expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
-      expect((await release(A)).state).toBe('available');
-      await free();
-    });
+  it('answers 404 for POST /close-window with a valid session and CSRF token', async () => {
+    await deploy(A);
+    await deploy(B);
+    const res = await post('/close-window', { releaseId: (await release(A)).id });
+    await idle();
+    expect(res.statusCode).toBe(404);
   });
 
   describe('POST /contract/retry', () => {
@@ -689,9 +654,9 @@ describe('UI routes', () => {
       contractExit = 1;
       await deploy(A);
       await deploy(B);
-      await post('/close-window', { releaseId: (await release(A)).id });
-      const first = (await ops()).find((o) => o.kind === 'contract')!;
-      expect(await settle(first.id)).toMatchObject({ status: 'failed', code: 'CONTRACT_FAILED' });
+      await orchestrator.runContract((await release(A)).id);
+      const first = (await ops()).find((o) => o.kind === 'contract');
+      expect(first).toMatchObject({ status: 'failed', code: 'CONTRACT_FAILED' });
       contractExit = 0;
     }
 

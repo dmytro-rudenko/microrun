@@ -117,12 +117,6 @@ export function nextContract(rs: ReleaseFacts[]): string | null {
   return found?.id ?? null;
 }
 
-export function closeWindow(rs: ReleaseFacts[], releaseId: string): string[] {
-  const target = rs.find((r) => r.id === releaseId);
-  if (!target) return [];
-  return rs.filter((r) => r.state === 'available' && r.deployedAt < target.deployedAt).map((r) => r.id);
-}
-
 export function onDestructiveApproved(rs: ReleaseFacts[]): string[] {
   return rs.filter((r) => r.state === 'available').map((r) => r.id);
 }

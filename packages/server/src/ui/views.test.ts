@@ -87,7 +87,7 @@ const PLAIN_URLS = [
   'mongodb://h1,h2/db?replicaSet=rs',
 ];
 
-const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go', 'cl.preparing', 'kind.approve'];
+const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'approve.expires', 'cl.preparing', 'kind.approve'];
 
 const KEY_SHAPED = /^[A-Za-z]\w*(\.\w+)+$/;
 
@@ -714,22 +714,11 @@ describe('panelView', () => {
     expect(out).not.toContain('approve-destructive');
   });
 
-  test('an available release offers close-window listing the older available releases it expires', () => {
-    const older = release({ id: 'r-old', sha: sha('1111111'), deployedAt: NOW - 2 * DAY });
-    const target = release({ id: 'r-new', sha: sha('2222222'), deployedAt: NOW - HOUR });
-    const stage = env('stage', { releases: [target, older] });
-    const out = panelView(i, stage, target, 'csrf-token', NOW).__html;
-    expect(i.t('closeWindow.go')).not.toBe('closeWindow.go');
-    expect(out).toContain('hx-post="/close-window"');
-    expect(out).toContain(i.t('closeWindow.go'));
-    expect(out).toContain(i.t('closeWindow.text', { list: '1111111' }));
-  });
-
-  test('an expired release does not offer close-window', () => {
-    const expired = release({ state: 'expired', windowLeftMs: null, windowPct: null });
-    const stage = env('stage', { releases: [expired] });
-    const out = panelView(i, stage, expired, 'csrf-token', NOW).__html;
+  test('an available release does not offer to close the rollback window', () => {
+    const stage = env('stage');
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
     expect(out).not.toContain('/close-window');
+    expect(out).not.toContain('data-testid="close-window"');
   });
 
   test('the will-block list is the active release plus available releases activated after the target', () => {
@@ -762,7 +751,7 @@ describe('panelView', () => {
     expect(list).not.toContain('4444444');
   });
 
-  test('the approve section lists the sha7 of every available release of the env and no other', () => {
+  test('the approval warning lists every available release of the env and no other', () => {
     const quiet = { windowLeftMs: null, windowPct: null };
     const bad = release({ id: 'r-bad', sha: sha('fffffff'), state: 'failed', ...quiet, failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users.email' } } });
     const stage = env('stage', {
@@ -779,7 +768,7 @@ describe('panelView', () => {
     const at = out.lastIndexOf(i.t('approve.title'));
     expect(at).toBeGreaterThanOrEqual(0);
     const section = out.slice(at);
-    for (const listed of ['1111111', '2222222']) expect(section).toContain(listed);
+    expect(section).toContain(i.t('approve.expires', { list: '1111111, 2222222' }));
     for (const other of ['3333333', '4444444', '5555555']) expect(section).not.toContain(other);
   });
 });

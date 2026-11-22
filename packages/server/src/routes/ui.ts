@@ -429,14 +429,6 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     return panelOr404(d, req, reply, rel.id);
   });
 
-  app.post('/close-window', async (req, reply) => {
-    const id = field(bodyOf(req), 'releaseId');
-    if (!(await repo.getRelease(id))) return rejection(reply, langOf(req), 'INVALID_REQUEST');
-    const res = await orchestrator.closeWindow(id);
-    if ('rejected' in res) return rejection(reply, langOf(req), res.rejected.code, res.rejected.params);
-    return panelOr404(d, req, reply, id);
-  });
-
   app.post('/contract/retry', async (req, reply) => {
     const b = bodyOf(req);
     const rel = await repo.getRelease(field(b, 'releaseId'));
