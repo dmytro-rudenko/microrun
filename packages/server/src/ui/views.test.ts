@@ -747,6 +747,30 @@ describe('panelView', () => {
     expect(out).toContain(i.t('confirm.ask'));
   });
 
+  test('for production the confirm step moves focus to Yes and back to the main button', () => {
+    const prod = env('prod');
+    const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', NOW).__html;
+    expect(tagOf(out, 'rollback-go')).toContain('querySelector(&#39;[type=submit]&#39;).focus()');
+    expect(tagOf(out, 'confirm-no')).toContain('focus()');
+  });
+
+  test('the active release rolls back to the available one with the highest activationSeq', () => {
+    const first = release({ id: 'r-seq1', state: 'available', activationSeq: 1 });
+    const third = release({ id: 'r-seq3', state: 'available', activationSeq: 3 });
+    const active = release({ id: 'r-act', state: 'active', activationSeq: 4 });
+    const stage = env('stage', { releases: [active, first, third] });
+    const out = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    expect(out).toContain('<input type="hidden" name="releaseId" value="r-seq3">');
+    expect(out).not.toContain('name="releaseId" value="r-seq1"');
+  });
+
+  test('the active release offers no rollback without an available release', () => {
+    const active = release({ id: 'r-act', state: 'active', activationSeq: 2 });
+    const stage = env('stage', { releases: [active, release({ id: 'r-exp', state: 'expired', activationSeq: 1 })] });
+    const out = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    expect(out).not.toContain('data-testid="rollback-go"');
+  });
+
   test('an available release offers switching, the active one offers rollback to the previous build', () => {
     const older = release({ id: 'r-old', state: 'available', activationSeq: 1 });
     const active = release({ id: 'r-act', state: 'active', activationSeq: 2 });

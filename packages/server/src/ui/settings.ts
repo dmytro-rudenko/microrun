@@ -210,7 +210,7 @@ ${p.usedBy.length ? html`<span class="small" data-testid="server-used-by">${tr(i
 ${created ? html`<div class="alert ok" role="status"><p>${tr(i, 'settings.servers.created', { name: created.name })}</p><code data-testid="agent-token">${created.token}</code><p>${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command">${created.command}</pre></div>` : ''}
 ${p.error ? html`<div class="alert" role="alert" data-testid="server-error">${p.error}</div>` : ''}
 <div class="srv-new"><label>${tr(i, 'srv.add')} <input type="text" name="server_name" data-testid="server-name" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('#srv').querySelector('[data-testid=server-create]').click()}"></label>
-<button type="button" data-testid="server-create" hx-post="/settings/servers" hx-include="#srv [name=server_name]" hx-params="server_name" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'srv.createPick')}</button></div>
+<button type="button" data-testid="server-create" hx-post="/settings/servers" hx-include="#srv [name=server_name], #srv [name=server_id]" hx-params="server_name,server_id" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'srv.createPick')}</button></div>
 </div>`;
 }
 

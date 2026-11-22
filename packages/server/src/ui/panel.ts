@@ -2,8 +2,8 @@ import type { I18n } from '@microrun/core/i18n';
 import { codeText, html, raw, tr, type Html } from './html.ts';
 import { blockedNote, diffView, prodTag, short, stateLabel, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
 
-const ASK = "this.hidden=true;this.nextElementSibling.hidden=false";
-const BACK = "var a=this.parentNode;a.hidden=true;a.previousElementSibling.hidden=false";
+const ASK = "this.hidden=true;var a=this.nextElementSibling;a.hidden=false;a.querySelector('[type=submit]').focus()";
+const BACK = "var a=this.parentNode;a.hidden=true;var g=a.previousElementSibling;g.hidden=false;g.focus()";
 
 const post = (url: string, csrf: string) =>
   html`hx-post="${url}" hx-headers="${JSON.stringify({ 'x-csrf-token': csrf })}" hx-target="#panel"`;

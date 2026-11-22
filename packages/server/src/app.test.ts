@@ -639,6 +639,21 @@ describe('UI routes', () => {
       expect((await post('/approve', { envId: prodId, commitSha: A, confirm: 'yes' })).statusCode).toBe(422);
       expect(await repo.getApproval(prodId, A)).toBeNull();
     });
+
+    it('stores a staging approval without confirm and still refuses a production one', async () => {
+      const first = await postDeploy(STAGING_TOKEN, A, {}, 'develop');
+      expect(first.statusCode, first.body).toBe(202);
+      await settle(first.json().operationId);
+      await destructiveRejection();
+      expect((await post('/approve', { envId: prodId, commitSha: B })).statusCode).toBe(422);
+      expect(await repo.getApproval(prodId, B)).toBeNull();
+      const res = await postDeploy(STAGING_TOKEN, B, {}, 'develop');
+      expect(res.statusCode, res.body).toBe(202);
+      expect(await settle(res.json().operationId)).toMatchObject({ status: 'rejected', code: 'SCHEMA_DESTRUCTIVE' });
+      const ok = await post('/approve', { envId: stagingId, commitSha: B });
+      expect(ok.statusCode, ok.body).toBe(200);
+      expect(await repo.getApproval(stagingId, B)).toMatchObject({ envId: stagingId, commitSha: B });
+    });
   });
 
   describe('POST /close-window', () => {
@@ -1144,6 +1159,14 @@ describe('UI routes', () => {
       expect(res.body).toMatch(new RegExp(`<option value="${edge!.id}" selected`));
       expect((await repo.listServers()).some((s) => s.name === 'production')).toBe(false);
       expect(res.body).toContain('data-testid="agent-status" data-status="offline"');
+    });
+
+    it('keeps the selected server_id when the create answers 422', async () => {
+      await post('/settings/servers', { server_name: 'edge' });
+      const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
+      const res = await post('/settings/servers', { server_name: '', server_id: edge.id });
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.body).toContain(`<option value="${edge.id}" selected`);
     });
 
     it('answers 422 for a taken or empty server name and creates nothing', async () => {

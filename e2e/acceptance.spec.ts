@@ -66,7 +66,10 @@ test('remote npm agent comes online without inbound ports', async () => {
 
   await expect(async () => {
     await page.goto('/env/new');
-    await page.selectOption('[name=server_id]', { label: 'remote-1' });
+    await Promise.all([
+      page.waitForResponse((r) => r.url().includes('/settings/servers/block')),
+      page.selectOption('[name=server_id]', { label: 'remote-1' }),
+    ]);
     await expect(page.locator('[data-testid=agent-status]')).toHaveAttribute('data-status', 'online');
   }).toPass({ timeout: 20_000 });
 });

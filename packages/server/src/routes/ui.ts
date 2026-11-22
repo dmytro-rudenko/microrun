@@ -422,7 +422,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const b = bodyOf(req);
     const i = langOf(req);
     const env = await repo.getEnv(field(b, 'envId'));
-    if (!env || field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', env ? { env: env.name } : {});
+    if (!env) return rejection(reply, i, 'INVALID_REQUEST', {});
+    if (env.isProduction && field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
     const sha = field(b, 'commitSha');
     try {
       await orchestrator.approveDestructive(env.id, sha);
@@ -471,9 +472,11 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const b = bodyOf(req);
     const name = field(b, 'server_name');
     const i = langOf(req);
-    if (!name) return sendHtml(reply, await blockFor(d, req, await defaultServer(d), { error: i.t('settings.err.required') }), 422);
+    const picked = field(b, 'server_id');
+    const keep = async () => ((await repo.getServer(picked)) ? picked : await defaultServer(d));
+    if (!name) return sendHtml(reply, await blockFor(d, req, await keep(), { error: i.t('settings.err.required') }), 422);
     if ((await repo.listServers()).some((s) => s.name === name)) {
-      return sendHtml(reply, await blockFor(d, req, await defaultServer(d), { error: i.t('settings.err.serverTaken') }), 422);
+      return sendHtml(reply, await blockFor(d, req, await keep(), { error: i.t('settings.err.serverTaken') }), 422);
     }
     const token = newToken();
     const server = await repo.createServer({ name, agentTokenHash: hashToken(token), builtin: false });

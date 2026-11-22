@@ -515,11 +515,11 @@ describe('serverBlock', () => {
     for (const b of buttons) expect(b).toContain('type="button"');
   });
 
-  test('the create button posts server_name only', () => {
+  test('the create button posts server_name and the selected server_id', () => {
     const tag = tagOf(block(), 'server-create')!;
     expect(tag).toContain('hx-post="/settings/servers"');
-    expect(tag).toContain('hx-params="server_name"');
-    expect(tag).toContain('hx-include="#srv [name=server_name]"');
+    expect(tag).toContain('hx-params="server_name,server_id"');
+    expect(tag).toContain('hx-include="#srv [name=server_name], #srv [name=server_id]"');
     expect(tag).toContain('hx-target="#srv"');
   });
 
