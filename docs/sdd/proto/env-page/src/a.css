@@ -1,0 +1,4 @@
+.jump{position:sticky;top:env(safe-area-inset-top,0px);z-index:3;display:flex;gap:6px;flex-wrap:wrap;background:var(--bg);padding-block:8px;border-bottom:1px solid var(--line)}
+.jump a{padding:5px 12px;border-radius:6px;border:1px solid var(--line);background:var(--card);color:var(--ink);text-decoration:none}
+.jump a:hover{border-color:var(--accent)}
+.block{scroll-margin-top:56px}

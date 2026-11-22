@@ -1,0 +1,5 @@
+.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+.tabs a{padding:8px 14px;color:var(--mute);text-decoration:none;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tabs a.on{color:var(--ink);border-bottom-color:var(--accent);font-weight:600}
+.tabs a:hover{color:var(--ink)}
+.cnt{font-size:11px;background:var(--code);border-radius:99px;padding:0 6px;color:var(--mute)}
