@@ -1,7 +1,7 @@
 import { dueExpiry, lapseCleanup, nextContract } from '@microrun/core/state';
 import { AgentError } from '@microrun/core/protocol';
 import type { AgentPort, StorageConfig } from '@microrun/core/protocol';
-import { BusyError } from './db/repo.ts';
+import { BusyError, composeRefOf } from './db/repo.ts';
 import type { EnvRow, ReleaseRow, Repo } from './db/repo.ts';
 
 function message(e: unknown): string {
@@ -164,7 +164,7 @@ export class Scheduler {
           {
             type: 'readMarker',
             db: {
-              compose: { project: env.composeProject, dir: env.composeDir, files: env.composeFiles },
+              compose: composeRefOf(env),
               service: env.migrationService,
               dbKind: env.dbKind,
               dbUrlEnv: env.dbUrlEnv,

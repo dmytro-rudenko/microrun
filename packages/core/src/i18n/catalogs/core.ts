@@ -1,7 +1,7 @@
 import type { Catalog } from '../index.ts';
 
 const usage = (word: string) =>
-  `${word}: microrun deploy --url <url> --token <token> --image <svc>=<ref> --commit <sha> --branch <branch> [--lang <lang>]`;
+  `${word}: microrun deploy --url <url> --token <token> --image <svc>=<ref> --commit <sha> --branch <branch> [--author <name>] [--message <text>] [--lang <lang>]`;
 
 export default {
   uk: {

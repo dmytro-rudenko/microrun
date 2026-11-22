@@ -97,6 +97,7 @@ function envInput(p: { name: string; branch: string; isProduction: boolean; posi
     composeProject: p.project,
     composeDir: `/srv/${p.project}`,
     composeFiles: ['docker-compose.yml'],
+    composeEnvFiles: [],
     services: [{ name: 'web', strategy: 'rolling', domain: `${p.project}.example.com`, port: 3000 }],
     migrationService: 'web',
     dbKind: 'postgres',

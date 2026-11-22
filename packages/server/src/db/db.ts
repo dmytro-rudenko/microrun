@@ -2,8 +2,13 @@ import knex from 'knex';
 import type { Knex } from 'knex';
 import * as init from './migrations/001_init.ts';
 import * as approveKind from './migrations/002_approve_kind.ts';
+import * as composeEnvFiles from './migrations/003_compose_env_files.ts';
 
-const migrations: Record<string, Knex.Migration> = { '001_init': init, '002_approve_kind': approveKind };
+const migrations: Record<string, Knex.Migration> = {
+  '001_init': init,
+  '002_approve_kind': approveKind,
+  '003_compose_env_files': composeEnvFiles,
+};
 
 const migrationSource: Knex.MigrationSource<string> = {
   getMigrations: async () => Object.keys(migrations),

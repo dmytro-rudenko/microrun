@@ -29,6 +29,7 @@ async function mkEnv(serverId: string, name: string, branch: string) {
     composeProject: `proj-${name}`,
     composeDir: `/srv/${name}`,
     composeFiles: ['docker-compose.yml'],
+    composeEnvFiles: ['/etc/shop/.env'],
     services: [{ name: 'web', strategy: 'rolling', domain: `${name}.example.com`, port: 3000 }],
     migrationService: 'web',
     dbKind: 'postgres',
@@ -130,6 +131,7 @@ describe('Repo', () => {
 
     const e = await repo.getEnv(env.id);
     expect(e?.composeFiles).toEqual(['docker-compose.yml']);
+    expect(e?.composeEnvFiles).toEqual(['/etc/shop/.env']);
     expect(e?.services).toEqual([{ name: 'web', strategy: 'rolling', domain: 'staging.example.com', port: 3000 }]);
     expect(e?.migrationTables).toEqual(['knex_migrations']);
     expect(Buffer.from(e!.storageConfigEnc)).toEqual(Buffer.from([1, 2, 3]));

@@ -10,6 +10,7 @@ import { createGunzip, createGzip } from 'node:zlib';
 import { DeleteObjectCommand, GetObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
 import { AgentError, type StorageConfig } from '@microrun/core/protocol';
+import { TarIndex } from './archive.ts';
 import { docker } from './docker.ts';
 
 type S3Config = Extract<StorageConfig, { kind: 's3' }>;
@@ -49,10 +50,14 @@ function exited(child: ChildProcess): Promise<number> {
   });
 }
 
-async function save(refs: string[], sink: Writable, alongside: Promise<unknown> = Promise.resolve()): Promise<void> {
+async function save(kind: string, refs: string[], sink: Writable, alongside: Promise<unknown> = Promise.resolve()): Promise<void> {
   const child = spawn('docker', ['save', ...refs], { stdio: ['ignore', 'pipe', 'ignore'] });
-  const [code] = await Promise.all([exited(child), pipeline(child.stdout!, createGzip(), sink), alongside]);
+  const index = new TarIndex();
+  const [code] = await Promise.all([exited(child), pipeline(child.stdout!, index, createGzip(), sink), alongside]);
   if (code !== 0) throw new Error(`docker save exited ${code}`);
+  // With the containerd image store, docker save exits 0 without the layers it no longer keeps compressed.
+  const gap = index.missing();
+  if (gap) throw new AgentError('STORAGE_FAILED', { kind, reason: 'incomplete', image: gap.image, missing: gap.paths.length });
 }
 
 async function load(source: Readable): Promise<void> {
@@ -106,7 +111,7 @@ export function storeImages(s: StorageConfig, env: string, sha: string, images: 
       const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
       await mkdir(join(s.path, envSlug(env)), { recursive: true });
       try {
-        await save(refs, createWriteStream(tmp));
+        await save(s.kind, refs, createWriteStream(tmp));
         await rename(tmp, file);
       } finally {
         await rm(tmp, { force: true });
@@ -117,7 +122,7 @@ export function storeImages(s: StorageConfig, env: string, sha: string, images: 
       const body = new PassThrough();
       try {
         const upload = new Upload({ client, params: { Bucket: s.bucket, Key, Body: body } });
-        await save(refs, body, upload.done()).catch(async (e: unknown) => {
+        await save(s.kind, refs, body, upload.done()).catch(async (e: unknown) => {
           await client.send(new DeleteObjectCommand({ Bucket: s.bucket, Key })).catch(() => {});
           throw e;
         });

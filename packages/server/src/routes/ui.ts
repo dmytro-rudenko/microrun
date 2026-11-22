@@ -6,7 +6,7 @@ import type { DiffEntry } from '@microrun/core/schema';
 import { windowLeftMs } from '@microrun/core/state';
 import { finished, streamOperation, type AppDeps, type Frame } from '../app.ts';
 import { decrypt, encrypt, hashToken, newToken } from '../crypto.ts';
-import type { EnvRow, OperationRow, ReleaseRow, ServerRow } from '../db/repo.ts';
+import { composeRefOf, type EnvRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
 import { boardView, short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
 import { envView } from '../ui/env.ts';
 import { historyView, type HistoryVM } from '../ui/history.ts';
@@ -229,6 +229,7 @@ function toValues(d: AppDeps, env: EnvRow): EnvFormValues {
     compose_project: env.composeProject,
     compose_dir: env.composeDir,
     compose_files: env.composeFiles.join('\n'),
+    compose_env_files: env.composeEnvFiles.join('\n'),
     services: env.services.map(serviceLine).join('\n'),
     migration_service: env.migrationService,
     db_kind: env.dbKind,
@@ -270,7 +271,7 @@ async function inspect(d: AppDeps, v: EnvFormParsed) {
   try {
     return await d.hub.call<'inspectEnv'>(v.serverId, { opId: randomUUID(), step: 'inspectEnv' }, {
       type: 'inspectEnv',
-      compose: { project: v.composeProject, dir: v.composeDir, files: v.composeFiles },
+      compose: composeRefOf(v),
       dbUrlEnv: v.dbUrlEnv,
     });
   } catch (e) {

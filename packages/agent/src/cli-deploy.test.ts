@@ -146,16 +146,27 @@ describe('runDeploy request', () => {
     expect(header(h.calls[0]!, 'authorization')).toBe('Bearer env-tok');
   });
 
-  it('defaults author and message from git log -1', async () => {
+  it('defaults author and message from git log of the deployed commit', async () => {
     const h = harness([accepted(), sse([done('succeeded')])], {
-      'log -1 --format=%an': 'Git Author\n',
-      'log -1 --format=%s': 'git subject\n',
+      [`log -1 --format=%an ${SHA} --`]: 'Git Author\n',
+      [`log -1 --format=%s ${SHA} --`]: 'git subject\n',
     });
     const args = without(without(baseArgs, '--author'), '--message');
     await runDeploy(args, {}, h.deps);
     const body = postBody(h.calls[0]!) as { author: string; message: string };
     expect(body.author).toBe('Git Author');
     expect(body.message).toBe('git subject');
+  });
+
+  it('sends empty author and message when the commit is not in the local repository', async () => {
+    const h = harness([accepted(), sse([done('succeeded')])]);
+    h.deps.git = async () => {
+      throw new Error('fatal: bad object');
+    };
+    await runDeploy(without(without(baseArgs, '--author'), '--message'), {}, h.deps);
+    const body = postBody(h.calls[0]!) as { author: string; message: string };
+    expect(body.author).toBe('');
+    expect(body.message).toBe('');
   });
 
   it('does not ask git when --author and --message are given', async () => {
