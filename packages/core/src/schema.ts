@@ -109,23 +109,29 @@ function parseType(t: string): { base: string; args: number[] | null } {
 
 const INTEGER_RANK = ['smallint', 'int', 'bigint'];
 
+type ParsedType = ReturnType<typeof parseType>;
+
+function varcharWidening(a: ParsedType, b: ParsedType): boolean {
+  if (b.args === null) return true;
+  return a.args !== null && (b.args[0] ?? 0) > (a.args[0] ?? 0);
+}
+
+function numericWidening(from: number[], b: ParsedType): boolean {
+  if (b.args === null) return true;
+  const [p = 0, s = 0] = from;
+  const [p2 = 0, s2 = 0] = b.args;
+  return p2 - s2 >= p - s && s2 >= s;
+}
+
 function isWidening(from: string, to: string): boolean {
   const a = parseType(from);
   const b = parseType(to);
-  if (a.base === 'varchar' && b.base === 'varchar') {
-    if (b.args === null) return true;
-    return a.args !== null && (b.args[0] ?? 0) > (a.args[0] ?? 0);
-  }
+  if (a.base === 'varchar' && b.base === 'varchar') return varcharWidening(a, b);
   if (a.base === 'varchar' && to === 'text') return true;
   const ia = INTEGER_RANK.indexOf(from);
   const ib = INTEGER_RANK.indexOf(to);
   if (ia >= 0 && ib >= 0) return ib > ia;
-  if (a.base === 'numeric' && b.base === 'numeric' && a.args !== null) {
-    if (b.args === null) return true;
-    const [p = 0, s = 0] = a.args;
-    const [p2 = 0, s2 = 0] = b.args;
-    return p2 - s2 >= p - s && s2 >= s;
-  }
+  if (a.base === 'numeric' && b.base === 'numeric' && a.args !== null) return numericWidening(a.args, b);
   return false;
 }
 
@@ -151,32 +157,34 @@ function diffIndexes<T extends { name: string; unique: boolean }>(base: T[], nex
   return out;
 }
 
+function diffColumn(engine: SqlEngine, object: string, bc: Column, nc: Column): DiffEntry[] {
+  const out: DiffEntry[] = [];
+  const from = normalizeType(engine, bc.type);
+  const to = normalizeType(engine, nc.type);
+  if (from !== to) out.push({ kind: isWidening(from, to) ? 'add' : 'drop', object, detail: `${from} → ${to}` });
+  if (bc.nullable && !nc.nullable) out.push({ kind: 'drop', object, detail: 'nullable → NOT NULL' });
+  if (!bc.nullable && nc.nullable) out.push({ kind: 'add', object, detail: 'NOT NULL → nullable' });
+  const d1 = normalizeDefault(bc.default);
+  const d2 = normalizeDefault(nc.default);
+  if (d1 !== d2) out.push({ kind: 'add', object, detail: `default ${d1} → ${d2}` });
+  return out;
+}
+
+const addedColumn = (object: string, nc: Column): DiffEntry =>
+  nc.nullable || nc.default !== null
+    ? { kind: 'add', object, detail: 'column added' }
+    : { kind: 'drop', object, detail: 'NOT NULL column added without default' };
+
 function diffColumns(table: string, engine: SqlEngine, base: Column[], next: Column[]): DiffEntry[] {
   const out: DiffEntry[] = [];
   const b = byName(base);
   const n = byName(next);
   for (const [name, bc] of b) {
-    const object = `${table}.${name}`;
     const nc = n.get(name);
-    if (!nc) {
-      out.push({ kind: 'drop', object, detail: 'column removed' });
-      continue;
-    }
-    const from = normalizeType(engine, bc.type);
-    const to = normalizeType(engine, nc.type);
-    if (from !== to) out.push({ kind: isWidening(from, to) ? 'add' : 'drop', object, detail: `${from} → ${to}` });
-    if (bc.nullable && !nc.nullable) out.push({ kind: 'drop', object, detail: 'nullable → NOT NULL' });
-    if (!bc.nullable && nc.nullable) out.push({ kind: 'add', object, detail: 'NOT NULL → nullable' });
-    const d1 = normalizeDefault(bc.default);
-    const d2 = normalizeDefault(nc.default);
-    if (d1 !== d2) out.push({ kind: 'add', object, detail: `default ${d1 ?? 'null'} → ${d2 ?? 'null'}` });
+    if (nc) out.push(...diffColumn(engine, `${table}.${name}`, bc, nc));
+    else out.push({ kind: 'drop', object: `${table}.${name}`, detail: 'column removed' });
   }
-  for (const [name, nc] of n) {
-    if (b.has(name)) continue;
-    const object = `${table}.${name}`;
-    if (nc.nullable || nc.default !== null) out.push({ kind: 'add', object, detail: 'column added' });
-    else out.push({ kind: 'drop', object, detail: 'NOT NULL column added without default' });
-  }
+  for (const [name, nc] of n) if (!b.has(name)) out.push(addedColumn(`${table}.${name}`, nc));
   return out;
 }
 

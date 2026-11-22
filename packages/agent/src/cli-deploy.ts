@@ -66,52 +66,150 @@ async function readEvents(body: ReadableStream<Uint8Array>, onEvent: (e: Operati
   }
 }
 
-export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: DeployDeps = {}): Promise<number> {
-  const doFetch = deps.fetch ?? fetch;
-  const git = deps.git ?? defaultGit;
-  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
-  const out = deps.out ?? ((s: string) => void process.stdout.write(`${s}\n`));
-  const err = deps.err ?? ((s: string) => void process.stderr.write(`${s}\n`));
+type Translate = ReturnType<typeof i18n>['t'];
+type Values = ReturnType<typeof parseArgs>['values'];
 
-  let values: ReturnType<typeof parseArgs>['values'] = {};
+interface Ctx {
+  fetch: typeof fetch;
+  out: (s: string) => void;
+  err: (s: string) => void;
+  t: Translate;
+  url: string;
+  headers: Record<string, string>;
+}
+
+const OPTIONS = {
+  url: { type: 'string' },
+  token: { type: 'string' },
+  image: { type: 'string', multiple: true },
+  commit: { type: 'string' },
+  branch: { type: 'string' },
+  author: { type: 'string' },
+  message: { type: 'string' },
+  'busy-timeout': { type: 'string' },
+  lang: { type: 'string' },
+} as const;
+
+function parseDeployArgs(argv: string[]): Values {
   try {
-    values = parseArgs({
-      args: argv,
-      options: {
-        url: { type: 'string' },
-        token: { type: 'string' },
-        image: { type: 'string', multiple: true },
-        commit: { type: 'string' },
-        branch: { type: 'string' },
-        author: { type: 'string' },
-        message: { type: 'string' },
-        'busy-timeout': { type: 'string' },
-        lang: { type: 'string' },
-      },
-      allowPositionals: false,
-    }).values;
+    return parseArgs({ args: argv, options: OPTIONS, allowPositionals: false }).values;
   } catch {
-    values = {};
+    return {};
   }
+}
 
-  const lang = fromEnvLocale(env, values.lang as string | undefined);
-  const t = i18n(lang).t;
-  const usage = (): number => {
-    err(t('cli.usage'));
+function unreachable(ctx: Ctx): number {
+  ctx.err(ctx.t('cli.unreachable'));
+  return 3;
+}
+
+function doneResult(ctx: Ctx, e: Extract<OperationEvent, { type: 'done' }>): number {
+  if (e.status === 'succeeded') {
+    ctx.out(ctx.t('cli.done.ok'));
+    return 0;
+  }
+  const detail = e.code ? `${e.code}: ${e.message}` : e.message;
+  if (detail) ctx.err(detail);
+  const rejected = e.code !== null && REJECT_CODES.includes(e.code);
+  ctx.err(ctx.t(rejected ? 'cli.done.rejected' : 'cli.done.failed'));
+  return rejected ? 2 : 1;
+}
+
+async function streamOperation(ctx: Ctx, operationId: string): Promise<number> {
+  let result: number | undefined;
+  try {
+    const res = await ctx.fetch(`${ctx.url}/api/v1/operations/${operationId}/events`, {
+      headers: { ...ctx.headers, accept: 'text/event-stream' },
+    });
+    if (!res.ok || !res.body) return unreachable(ctx);
+    await readEvents(res.body, (e) => {
+      if (e.type === 'done') {
+        result = doneResult(ctx, e);
+        return true;
+      }
+      if (e.type === 'log') ctx.out(e.line);
+      else if (e.status === 'running') ctx.out(ctx.t('cli.step', { step: e.step }));
+      return false;
+    });
+  } catch {
+    return unreachable(ctx);
+  }
+  if (result === undefined) {
+    ctx.err(ctx.t('cli.streamClosed', { op: operationId }));
     return 3;
-  };
+  }
+  return result;
+}
 
+function answerCode(ctx: Ctx, status: number, body: Partial<ApiError> | null): number {
+  ctx.err(body?.code ? `${body.code}: ${body.message ?? ''}` : `HTTP ${status}`);
+  if (body?.code && REJECT_CODES.includes(body.code)) return 2;
+  return status === 422 ? 1 : 3;
+}
+
+async function postDeploy(ctx: Ctx, payload: string, busyTimeoutS: number, sleep: (ms: number) => Promise<void>): Promise<number> {
+  let waitedMs = 0;
+  for (;;) {
+    let res: Response;
+    try {
+      res = await ctx.fetch(`${ctx.url}/api/v1/deploy`, {
+        method: 'POST',
+        headers: { ...ctx.headers, 'content-type': 'application/json' },
+        body: payload,
+      });
+    } catch {
+      return unreachable(ctx);
+    }
+    if (res.status === 202) return streamOperation(ctx, ((await res.json()) as DeployAccepted).operationId);
+    const body = (await res.json().catch(() => null)) as Partial<ApiError> | null;
+    if (res.status === 200 && body?.code === 'ALREADY_ACTIVE') {
+      ctx.out(ctx.t('cli.done.ok'));
+      return 0;
+    }
+    const busy = res.status === 409 && body?.code === 'ENV_BUSY';
+    if (!busy || waitedMs + RETRY_MS > busyTimeoutS * 1000) return answerCode(ctx, res.status, body);
+    ctx.out(ctx.t('cli.busy.wait', { s: RETRY_MS / 1000 }));
+    await sleep(RETRY_MS);
+    waitedMs += RETRY_MS;
+  }
+}
+
+function resolveTarget(values: Values, env: NodeJS.ProcessEnv) {
   const url = ((values.url as string | undefined) ?? env.MICRORUN_URL)?.replace(/\/+$/, '');
   const token = (values.token as string | undefined) ?? env.MICRORUN_DEPLOY_TOKEN;
   const commit = values.commit as string | undefined;
   const branch = values.branch as string | undefined;
   const images = parseImages((values.image as string[] | undefined) ?? []);
   const busyTimeoutS = Number((values['busy-timeout'] as string | undefined) ?? DEFAULT_BUSY_TIMEOUT_S);
-  if (!url || !token || !commit || !branch || !images || !Number.isFinite(busyTimeoutS) || busyTimeoutS < 0) return usage();
+  if (!url || !token || !commit || !branch || !images || !Number.isFinite(busyTimeoutS) || busyTimeoutS < 0) return null;
+  return { url, token, commit, branch, images, busyTimeoutS };
+}
+
+function withDefaults(deps: DeployDeps): Required<DeployDeps> {
+  return {
+    fetch: deps.fetch ?? fetch,
+    git: deps.git ?? defaultGit,
+    sleep: deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+    out: deps.out ?? ((s: string) => void process.stdout.write(`${s}\n`)),
+    err: deps.err ?? ((s: string) => void process.stderr.write(`${s}\n`)),
+  };
+}
+
+export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: DeployDeps = {}): Promise<number> {
+  const d = withDefaults(deps);
+  const values = parseDeployArgs(argv);
+  const lang = fromEnvLocale(env, values.lang as string | undefined);
+  const t = i18n(lang).t;
+  const target = resolveTarget(values, env);
+  if (!target) {
+    d.err(t('cli.usage'));
+    return 3;
+  }
+  const { url, token, commit, branch, images, busyTimeoutS } = target;
 
   const gitLine = async (format: string) => {
     try {
-      return (await git(['log', '-1', `--format=${format}`])).trim();
+      return (await d.git(['log', '-1', `--format=${format}`])).trim();
     } catch {
       return '';
     }
@@ -119,83 +217,6 @@ export async function runDeploy(argv: string[], env: NodeJS.ProcessEnv, deps: De
   const author = (values.author as string | undefined) ?? (await gitLine('%an'));
   const message = (values.message as string | undefined) ?? (await gitLine('%s'));
 
-  const headers = { authorization: `Bearer ${token}`, 'accept-language': lang };
-  const unreachable = (): number => {
-    err(t('cli.unreachable'));
-    return 3;
-  };
-
-  let waitedMs = 0;
-  for (;;) {
-    let res: Response;
-    try {
-      res = await doFetch(`${url}/api/v1/deploy`, {
-        method: 'POST',
-        headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({ images, commit, branch, author, message }),
-      });
-    } catch {
-      return unreachable();
-    }
-
-    if (res.status === 202) {
-      const { operationId } = (await res.json()) as DeployAccepted;
-      return stream(operationId);
-    }
-    const body = (await res.json().catch(() => null)) as Partial<ApiError> | null;
-    if (res.status === 200 && body?.code === 'ALREADY_ACTIVE') {
-      out(t('cli.done.ok'));
-      return 0;
-    }
-    const line = body?.code ? `${body.code}: ${body.message ?? ''}` : `HTTP ${res.status}`;
-    if (res.status === 409 && body?.code === 'ENV_BUSY') {
-      if (waitedMs + RETRY_MS > busyTimeoutS * 1000) {
-        err(line);
-        return 3;
-      }
-      out(t('cli.busy.wait', { s: RETRY_MS / 1000 }));
-      await sleep(RETRY_MS);
-      waitedMs += RETRY_MS;
-      continue;
-    }
-    err(line);
-    if (body?.code && REJECT_CODES.includes(body.code)) return 2;
-    return res.status === 422 ? 1 : 3;
-  }
-
-  async function stream(operationId: string): Promise<number> {
-    let result: number | undefined;
-    try {
-      const res = await doFetch(`${url}/api/v1/operations/${operationId}/events`, {
-        headers: { ...headers, accept: 'text/event-stream' },
-      });
-      if (!res.ok || !res.body) return unreachable();
-      await readEvents(res.body, (e) => {
-        if (e.type === 'step') {
-          if (e.status === 'running') out(t('cli.step', { step: e.step }));
-        } else if (e.type === 'log') out(e.line);
-        else {
-          if (e.status === 'succeeded') {
-            out(t('cli.done.ok'));
-            result = 0;
-          } else {
-            const detail = e.code ? `${e.code}: ${e.message}` : e.message;
-            if (detail) err(detail);
-            const rejected = e.code !== null && REJECT_CODES.includes(e.code);
-            err(t(rejected ? 'cli.done.rejected' : 'cli.done.failed'));
-            result = rejected ? 2 : 1;
-          }
-          return true;
-        }
-        return false;
-      });
-    } catch {
-      return unreachable();
-    }
-    if (result === undefined) {
-      err(t('cli.streamClosed', { op: operationId }));
-      return 3;
-    }
-    return result;
-  }
+  const ctx: Ctx = { fetch: d.fetch, out: d.out, err: d.err, t, url, headers: { authorization: `Bearer ${token}`, 'accept-language': lang } };
+  return postDeploy(ctx, JSON.stringify({ images, commit, branch, author, message }), busyTimeoutS, d.sleep);
 }

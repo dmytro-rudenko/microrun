@@ -39,7 +39,7 @@ export type EnvFormValues = Partial<
 
 const oneOf = <T extends string>(list: readonly T[], v: string): v is T => (list as readonly string[]).includes(v);
 
-const text = (b: Body, k: string) => {
+export const text = (b: Body, k: string) => {
   const v = b[k];
   return (Array.isArray(v) ? (v[0] ?? '') : (v ?? '')).trim();
 };
@@ -95,6 +95,22 @@ function parseStorage(b: Body, kind: (typeof STORAGE_KINDS)[number], errors: Err
   return { kind, path: req('storage_path') };
 }
 
+function parseRetention(body: Body, errors: Errors): number {
+  const unit = text(body, 'retention_unit');
+  const amount = text(body, 'retention_value');
+  if (!oneOf(UNITS, unit)) {
+    errors.retention_unit = UNIT;
+    return 0;
+  }
+  if (!/^\d+(\.\d+)?$/.test(amount)) {
+    errors.retention_value = NUMBER;
+    return 0;
+  }
+  const retentionS = Math.round(Number(amount) * UNIT_SECONDS[unit]);
+  if (retentionS < MIN_RETENTION_S) errors.retention_value = RETENTION;
+  return retentionS;
+}
+
 export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | { ok: false; errors: Errors } {
   const errors: Errors = {};
   const req = (k: string) => {
@@ -123,15 +139,7 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
 
   const storageKind = choice(STORAGE_KINDS, 'storage_kind', text(body, 'storage_kind'), 'local');
 
-  const unit = text(body, 'retention_unit');
-  const amount = text(body, 'retention_value');
-  let retentionS = 0;
-  if (!oneOf(UNITS, unit)) errors.retention_unit = UNIT;
-  else if (!/^\d+(\.\d+)?$/.test(amount)) errors.retention_value = NUMBER;
-  else {
-    retentionS = Math.round(Number(amount) * UNIT_SECONDS[unit]);
-    if (retentionS < MIN_RETENTION_S) errors.retention_value = RETENTION;
-  }
+  const retentionS = parseRetention(body, errors);
 
   const value: EnvFormParsed = {
     name: req('name'),
@@ -200,6 +208,24 @@ const password = (name: string) => html`<input type="password" name="${name}" pl
 
 const checkbox = (name: string, on: boolean) => html`<input type="checkbox" name="${name}"${on ? ' checked' : ''}>`;
 
+function errorsBlock(i: I18n, errors: Record<string, string>): Html | string {
+  const entries = Object.entries(errors);
+  if (!entries.length) return '';
+  return html`<div class="alert" role="alert" data-testid="env-error"><p>${tr(i, 'settings.env.errors')}</p>
+<ul>${entries.map(([f, m]) => html`<li><b>${fieldLabel(i, f.startsWith('retention') ? 'retention' : f)}</b>: ${i.t(m)}</li>`)}</ul></div>`;
+}
+
+const bindResult = (bind: { ok: boolean; text: string }) =>
+  html`<div class="alert${bind.ok ? ' ok' : ''}" data-testid="bind-result" data-ok="${bind.ok ? 'true' : 'false'}">${bind.text}</div>`;
+
+const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: { ok: boolean; text: string } | undefined) =>
+  html`<form method="post" action="/settings/env/${id}/bind">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
+${bind ? bindResult(bind) : ''}
+<form method="post" action="/settings/env/${id}/token">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`;
+
+const deployTokenBlock = (i: I18n, token: string) =>
+  html`<div class="alert ok" role="status"><p>${tr(i, 'settings.env.tokenShown')}</p><code data-testid="deploy-token">${token}</code></div>`;
+
 export function envFormView(
   i: I18n,
   p: {
@@ -218,7 +244,6 @@ export function envFormView(
   const field = (name: string, control: Html, hint?: string) =>
     html`<label class="f"><span>${label(name)}</span>${control}${hint ? html`<small>${tr(i, `settings.h.${hint}`)}</small>` : ''}</label>`;
   const kind = v('storage_kind') || 'local';
-  const errors = Object.entries(p.errors);
   const id = p.values.id;
   const isProduction = v('is_production') !== '';
 
@@ -226,10 +251,7 @@ export function envFormView(
     html`<div class="kind" data-kind="${k}"${k === kind ? '' : ' hidden'}>${body}</div>`;
 
   return html`<h1>${tr(i, p.isNew ? 'settings.env.newTitle' : 'settings.env.editTitle')}</h1>
-${errors.length
-  ? html`<div class="alert" role="alert" data-testid="env-error"><p>${tr(i, 'settings.env.errors')}</p>
-<ul>${errors.map(([f, m]) => html`<li><b>${label(f.startsWith('retention') ? 'retention' : f)}</b>: ${i.t(m)}</li>`)}</ul></div>`
-  : ''}
+${errorsBlock(i, p.errors)}
 <form method="post" action="/settings/env" class="envform">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
 <fieldset><legend>${tr(i, 'settings.sec.general')}</legend>
 ${field('name', entry('name', v('name')))}
@@ -265,14 +287,6 @@ ${group('s3', html`${field('storage_endpoint', entry('storage_endpoint', v('stor
 ${field('retention', html`<span class="inline">${entry('retention_value', v('retention_value'), 'number')}${dropdown('retention_unit', v('retention_unit') || 'days', UNITS.map((u) => ({ value: u, label: tr(i, `settings.opt.${u}`) })))}</span>`, 'retention')}
 </fieldset>
 <button type="submit" data-testid="env-save">${tr(i, 'settings.env.save')}</button></form>
-${p.isNew
-  ? ''
-  : html`<form method="post" action="/settings/env/${id}/bind">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
-${p.bind
-  ? html`<div class="alert${p.bind.ok ? ' ok' : ''}" data-testid="bind-result" data-ok="${p.bind.ok ? 'true' : 'false'}">${p.bind.text}</div>`
-  : ''}
-<form method="post" action="/settings/env/${id}/token">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`}
-${p.deployToken
-  ? html`<div class="alert ok" role="status"><p>${tr(i, 'settings.env.tokenShown')}</p><code data-testid="deploy-token">${p.deployToken}</code></div>`
-  : ''}`;
+${p.isNew ? '' : envActions(i, id, csrf, p.bind)}
+${p.deployToken ? deployTokenBlock(i, p.deployToken) : ''}`;
 }

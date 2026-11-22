@@ -54,6 +54,14 @@ function isExempt(url: string): boolean {
   return path === '/login' || path.startsWith('/api/v1/');
 }
 
+async function requireAdmin(req: FastifyRequest, reply: FastifyReply) {
+  if (req.sessionId) return;
+  const htmx = req.headers['hx-request'] === 'true';
+  const html = (req.headers.accept ?? '').includes('text/html');
+  if (htmx || !html) return reply.code(401).send({ error: 'unauthorized' });
+  return reply.redirect('/login');
+}
+
 export function registerAuth(app: FastifyInstance, deps: AuthDeps): void {
   const { repo, config, clock } = deps;
   const render = deps.renderLogin ?? minimalLogin;
@@ -80,13 +88,7 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps): void {
     }
   });
 
-  app.decorate('requireAdmin', async (req: FastifyRequest, reply: FastifyReply) => {
-    if (req.sessionId) return;
-    const htmx = req.headers['hx-request'] === 'true';
-    const html = (req.headers.accept ?? '').includes('text/html');
-    if (htmx || !html) return reply.code(401).send({ error: 'unauthorized' });
-    return reply.redirect('/login');
-  });
+  app.decorate('requireAdmin', requireAdmin);
 
   const page = (reply: FastifyReply, status: number, error: boolean, req: FastifyRequest) =>
     reply.code(status).type('text/html; charset=utf-8').send(render({ error, csrf: req.csrfToken || undefined }));

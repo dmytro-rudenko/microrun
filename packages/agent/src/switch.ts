@@ -88,6 +88,37 @@ async function restoreOverride(c: ComposeRef, images: Record<string, string>, pr
   await writeOverride(c, images);
 }
 
+const replicasOf = (m: ComposeModel, name: string) => m.services[name]?.deploy?.replicas ?? m.services[name]?.scale ?? 1;
+
+async function stopDrained(old: Container[]): Promise<void> {
+  for (const [i, x] of old.entries()) {
+    if (i > 0) await sleep(DNS_DRAIN_MS);
+    await docker(['stop', '-t', '30', x.id]);
+    await docker(['rm', x.id]);
+  }
+}
+
+const allCurrent = (before: Container[], target: string | null) =>
+  !!target && before.length > 0 && before.every((x) => x.image === target && ready(x));
+
+async function stayedRunning(c: ComposeRef, svc: string, target: string): Promise<boolean> {
+  const limit = deadline(10_000);
+  let ok = true;
+  while (ok && !limit.expired()) {
+    ok = (await containers(c, svc)).some((x) => x.image === target);
+    if (ok) await sleep(500);
+  }
+  limit.clear();
+  return ok;
+}
+
+async function cameUp(c: ComposeRef, svc: ServiceSpec, target: string, healthTimeoutS: number, model: () => Promise<ComposeModel>): Promise<boolean> {
+  if (await hasHealthcheck((await model()).services[svc.name] ?? {}, svc.image)) {
+    return (await waitReady(c, svc.name, target, 1, new Set(), healthTimeoutS * 1000)) !== null;
+  }
+  return stayedRunning(c, svc.name, target);
+}
+
 async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, proxy: ProxyHook | null,
   images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
   await removeContainers((await containers(c, svc.name, true)).filter((x) => x.status !== 'running').map((x) => x.id));
@@ -97,7 +128,7 @@ async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, 
   const present = running.filter((x) => x.image === target);
   if (old.length === 0 && present.length > 0) return false;
   const m = await model();
-  const n = old.length || (m.services[svc.name]?.deploy?.replicas ?? m.services[svc.name]?.scale ?? 1);
+  const n = old.length || replicasOf(m, svc.name);
   const oldIds = new Set(old.map((x) => x.id));
   const previous = { ...images };
   images[svc.name] = svc.image;
@@ -118,11 +149,7 @@ async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, 
   if (!fresh) return fail(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 
   await proxy?.addUpstreams(svc, fresh.map((x) => x.name));
-  for (const [i, x] of old.entries()) {
-    if (i > 0) await sleep(DNS_DRAIN_MS);
-    await docker(['stop', '-t', '30', x.id]);
-    await docker(['rm', x.id]);
-  }
+  await stopDrained(old);
   await proxy?.removeUpstreams(svc, old.map((x) => x.name));
   return true;
 }
@@ -131,7 +158,7 @@ async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
   images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
   let target = await imageId(svc.image);
   const before = await containers(c, svc.name);
-  if (target && before.length > 0 && before.every((x) => x.image === target && ready(x))) return false;
+  if (allCurrent(before, target)) return false;
   const previous = { ...images };
   if (!previous[svc.name] && before[0]) previous[svc.name] = before[0].ref;
   images[svc.name] = svc.image;
@@ -147,18 +174,7 @@ async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
   const up = await docker(composeArgs(c, ['up', '-d', '--no-deps', svc.name]));
   if (up.code !== 0) return rollback(new AgentError('IMAGE_PULL_FAILED', { svc: svc.name, stderr: capped(up.stderr.trim()) }));
   target ??= await imageId(svc.image);
-  let ok = target !== null;
-  if (ok && await hasHealthcheck((await model()).services[svc.name] ?? {}, svc.image)) {
-    ok = (await waitReady(c, svc.name, target!, 1, new Set(), healthTimeoutS * 1000)) !== null;
-  } else if (ok) {
-    const limit = deadline(10_000);
-    while (ok && !limit.expired()) {
-      ok = (await containers(c, svc.name)).some((x) => x.image === target);
-      if (ok) await sleep(500);
-    }
-    limit.clear();
-  }
-  if (ok) return true;
+  if (target !== null && (await cameUp(c, svc, target, healthTimeoutS, model))) return true;
   return rollback(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 }
 

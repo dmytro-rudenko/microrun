@@ -163,6 +163,16 @@ function fromDb<T>(row: Record<string, unknown>, s: Shape): T {
   return out as T;
 }
 
+async function firstOf<T>(q: Knex.QueryBuilder, s: Shape): Promise<T | null> {
+  const r = await q.first();
+  return r ? fromDb<T>(r, s) : null;
+}
+
+async function allOf<T>(q: Knex.QueryBuilder, s: Shape): Promise<T[]> {
+  const rows: Record<string, unknown>[] = await q;
+  return rows.map((r) => fromDb<T>(r, s));
+}
+
 function isBusy(e: unknown): boolean {
   return e instanceof Error && /UNIQUE constraint failed: operations\.env_id/.test(e.message);
 }
@@ -181,18 +191,15 @@ export class Repo {
   }
 
   async listServers(): Promise<ServerRow[]> {
-    const rows = await this.db('servers').select().orderBy('name');
-    return rows.map((r) => fromDb<ServerRow>(r, SERVER));
+    return allOf<ServerRow>(this.db('servers').select().orderBy('name'), SERVER);
   }
 
   async serverByTokenHash(h: string): Promise<ServerRow | null> {
-    const r = await this.db('servers').where({ agent_token_hash: h }).first();
-    return r ? fromDb<ServerRow>(r, SERVER) : null;
+    return firstOf<ServerRow>(this.db('servers').where({ agent_token_hash: h }), SERVER);
   }
 
   async getServer(id: string): Promise<ServerRow | null> {
-    const r = await this.db('servers').where({ id }).first();
-    return r ? fromDb<ServerRow>(r, SERVER) : null;
+    return firstOf<ServerRow>(this.db('servers').where({ id }), SERVER);
   }
 
   async setServerSeen(id: string, at: number, version: string): Promise<void> {
@@ -216,18 +223,15 @@ export class Repo {
   }
 
   async listEnvs(): Promise<EnvRow[]> {
-    const rows = await this.db('environments').select().orderBy(['position', 'name']);
-    return rows.map((r) => fromDb<EnvRow>(r, ENV));
+    return allOf<EnvRow>(this.db('environments').select().orderBy(['position', 'name']), ENV);
   }
 
   async getEnv(id: string): Promise<EnvRow | null> {
-    const r = await this.db('environments').where({ id }).first();
-    return r ? fromDb<EnvRow>(r, ENV) : null;
+    return firstOf<EnvRow>(this.db('environments').where({ id }), ENV);
   }
 
   async envByDeployTokenHash(h: string): Promise<EnvRow | null> {
-    const r = await this.db('environments').where({ deploy_token_hash: h }).first();
-    return r ? fromDb<EnvRow>(r, ENV) : null;
+    return firstOf<EnvRow>(this.db('environments').where({ deploy_token_hash: h }), ENV);
   }
 
   async setEnvMarker(id: string, markerId: string): Promise<void> {
@@ -241,13 +245,11 @@ export class Repo {
   }
 
   async listReleases(envId: string): Promise<ReleaseRow[]> {
-    const rows = await this.releases().where('r.env_id', envId).orderBy('r.deployed_at', 'desc');
-    return rows.map((r) => fromDb<ReleaseRow>(r, RELEASE));
+    return allOf<ReleaseRow>(this.releases().where('r.env_id', envId).orderBy('r.deployed_at', 'desc'), RELEASE);
   }
 
   async getRelease(id: string): Promise<ReleaseRow | null> {
-    const r = await this.releases().where('r.id', id).first();
-    return r ? fromDb<ReleaseRow>(r, RELEASE) : null;
+    return firstOf<ReleaseRow>(this.releases().where('r.id', id), RELEASE);
   }
 
   async insertRelease(r: NewRelease): Promise<ReleaseRow> {
@@ -277,13 +279,11 @@ export class Repo {
   }
 
   async getOperation(id: string): Promise<OperationRow | null> {
-    const r = await this.db('operations').where({ id }).first();
-    return r ? fromDb<OperationRow>(r, OPERATION) : null;
+    return firstOf<OperationRow>(this.db('operations').where({ id }), OPERATION);
   }
 
   async activeOperations(): Promise<OperationRow[]> {
-    const rows = await this.db('operations').whereIn('status', ['pending', 'running']).orderBy('started_at');
-    return rows.map((r) => fromDb<OperationRow>(r, OPERATION));
+    return allOf<OperationRow>(this.db('operations').whereIn('status', ['pending', 'running']).orderBy('started_at'), OPERATION);
   }
 
   async updateOperation(id: string, p: Partial<OperationRow>): Promise<void> {
@@ -316,8 +316,7 @@ export class Repo {
   async listOperations(f: { envId?: string; limit: number }): Promise<OperationRow[]> {
     const q = this.db('operations').select().orderBy('started_at', 'desc').limit(f.limit);
     if (f.envId) q.where({ env_id: f.envId });
-    const rows = await q;
-    return rows.map((r) => fromDb<OperationRow>(r, OPERATION));
+    return allOf<OperationRow>(q, OPERATION);
   }
 
   async putApproval(a: { envId: string; commitSha: string; diff: unknown; approvedAt: number }): Promise<void> {
@@ -329,8 +328,7 @@ export class Repo {
   }
 
   async getApproval(envId: string, sha: string): Promise<ApprovalRow | null> {
-    const r = await this.db('destructive_approvals').where({ env_id: envId, commit_sha: sha }).first();
-    return r ? fromDb<ApprovalRow>(r, APPROVAL) : null;
+    return firstOf<ApprovalRow>(this.db('destructive_approvals').where({ env_id: envId, commit_sha: sha }), APPROVAL);
   }
 
   async useApproval(envId: string, sha: string, opId: string): Promise<void> {

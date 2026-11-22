@@ -71,6 +71,39 @@ export class Scheduler {
     }
   }
 
+  private async purge(env: EnvRow, retentionMs: number, now: number): Promise<void> {
+    const rs = await this.d.repo.listReleases(env.id);
+    const due = new Set(dueExpiry(rs, retentionMs, now).purge);
+    for (const r of rs) {
+      if (!due.has(r.id)) continue;
+      if (r.state === 'expired' && env.contractCmd && r.contractedAt === null) continue;
+      try {
+        await this.d.agent.call<'deleteImages'>(env.serverId, { opId: `purge:${r.id}`, step: 'deleteImages' }, {
+          type: 'deleteImages',
+          ...this.imagesArgs(env, r),
+        });
+        await this.d.repo.patchReleases([{ id: r.id, patch: { imagePurgedAt: now } }]);
+      } catch (e) {
+        this.log(`scheduler: env ${env.name}: purge ${r.commitSha}: ${message(e)}`);
+      }
+    }
+  }
+
+  private async store(env: EnvRow): Promise<void> {
+    for (const r of await this.d.repo.listReleases(env.id)) {
+      if (r.stored || r.imagePurgedAt !== null) continue;
+      try {
+        await this.d.agent.call<'storeImages'>(env.serverId, { opId: `store:${r.id}`, step: 'storeImages' }, {
+          type: 'storeImages',
+          ...this.imagesArgs(env, r),
+        });
+        await this.d.repo.patchReleases([{ id: r.id, patch: { stored: true } }]);
+      } catch (e) {
+        this.log(`scheduler: env ${env.name}: store ${r.commitSha}: ${message(e)}`);
+      }
+    }
+  }
+
   private async tickEnv(env: EnvRow, now: number): Promise<void> {
     const { repo } = this.d;
     const online = this.d.agent.isOnline(env.serverId);
@@ -92,41 +125,12 @@ export class Scheduler {
 
     if (online && env.contractCmd) await this.contract(env, env.contractCmd, now);
 
-    if (online) {
-      const rs = await repo.listReleases(env.id);
-      const due = new Set(dueExpiry(rs, retentionMs, now).purge);
-      for (const r of rs) {
-        if (!due.has(r.id)) continue;
-        if (r.state === 'expired' && env.contractCmd && r.contractedAt === null) continue;
-        try {
-          await this.d.agent.call<'deleteImages'>(env.serverId, { opId: `purge:${r.id}`, step: 'deleteImages' }, {
-            type: 'deleteImages',
-            ...this.imagesArgs(env, r),
-          });
-          await repo.patchReleases([{ id: r.id, patch: { imagePurgedAt: now } }]);
-        } catch (e) {
-          this.log(`scheduler: env ${env.name}: purge ${r.commitSha}: ${message(e)}`);
-        }
-      }
-    }
+    if (online) await this.purge(env, retentionMs, now);
 
     const lapsed = lapseCleanup(await repo.listReleases(env.id));
     if (lapsed.length) await repo.patchReleases(lapsed.map((id) => ({ id, patch: { cleanupState: 'lapsed' as const } })));
 
-    if (online) {
-      for (const r of await repo.listReleases(env.id)) {
-        if (r.stored || r.imagePurgedAt !== null) continue;
-        try {
-          await this.d.agent.call<'storeImages'>(env.serverId, { opId: `store:${r.id}`, step: 'storeImages' }, {
-            type: 'storeImages',
-            ...this.imagesArgs(env, r),
-          });
-          await repo.patchReleases([{ id: r.id, patch: { stored: true } }]);
-        } catch (e) {
-          this.log(`scheduler: env ${env.name}: store ${r.commitSha}: ${message(e)}`);
-        }
-      }
-    }
+    if (online) await this.store(env);
   }
 
   private async contract(env: EnvRow, cmd: string, now: number): Promise<void> {

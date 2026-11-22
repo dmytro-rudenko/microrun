@@ -71,7 +71,6 @@ async function composeWarning(run: DockerRun): Promise<string | null> {
     const parts = r.stdout.trim().replace(/^v/, '').split(/[.-]/).map((x) => Number.parseInt(x, 10));
     for (let i = 0; i < MIN_COMPOSE.length; i++) {
       const v = parts[i] ?? 0;
-      if (Number.isNaN(v)) return COMPOSE_WARNING;
       if (v !== MIN_COMPOSE[i]) return v > MIN_COMPOSE[i]! ? null : COMPOSE_WARNING;
     }
     return null;
@@ -118,6 +117,43 @@ async function pullImages(run: DockerRun, refs: string[]): Promise<Record<string
   return out;
 }
 
+const pingResult = (w: string | null) => (w ? { agentVersion: AGENT_VERSION, warning: w } : { agentVersion: AGENT_VERSION });
+
+async function proxyFor(L: Layers, stateDir: string, mode: 'external' | 'bundled'): Promise<ProxyHook | null> {
+  if (mode !== 'bundled') return null;
+  const p = L.bundledProxy(stateDir);
+  await p.ensure();
+  return p;
+}
+
+async function dispatch(L: Layers, run: DockerRun, stateDir: string, warning: Promise<string | null>, cmd: Command): Promise<unknown> {
+  switch (cmd.type) {
+    case 'ping': return pingResult(await warning);
+    case 'inspectEnv': return L.inspectEnv(cmd.compose, cmd.dbUrlEnv);
+    case 'readMarker': return { markers: await L.readMarkers(cmd.db, [cmd.viaService ?? cmd.db.service]) };
+    case 'writeMarker':
+      await L.writeMarker(cmd.db, cmd.envId, cmd.envName);
+      return { envId: cmd.envId };
+    case 'pullImages': return { digests: await pullImages(run, cmd.refs) };
+    case 'snapshotSchema': return { snapshot: await L.snapshotSchema(cmd.db) };
+    case 'dryRunExpand':
+      return L.dryRunExpand(cmd.db, { image: cmd.image, cmd: cmd.cmd, migrationTables: cmd.migrationTables, opId: cmd.opId, env: cmd.env });
+    case 'runCommand':
+      return L.runOneOff(cmd.compose, { service: cmd.service, image: cmd.image, cmd: cmd.cmd, args: cmd.args, env: cmd.env });
+    case 'switchServices': return L.switchServices(cmd.compose, cmd.services, cmd.healthTimeoutS, await proxyFor(L, stateDir, cmd.proxyMode));
+    case 'storeImages':
+      await L.storeImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
+      await L.pinImages(cmd.env, cmd.sha, cmd.images);
+      return {};
+    case 'fetchImages':
+      await L.fetchImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
+      return {};
+    case 'deleteImages':
+      await L.deleteImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
+      return {};
+  }
+}
+
 export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?: Partial<Layers> }): Handler {
   mkdirSync(d.stateDir, { recursive: true });
   const L: Layers = { ...defaults, ...d.layers };
@@ -132,45 +168,6 @@ export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?
   const warning = composeWarning(run);
   const ready = Promise.all([warning, sweep([...dirs]).catch(() => {})]);
 
-  async function dispatch(cmd: Command): Promise<unknown> {
-    switch (cmd.type) {
-      case 'ping': {
-        const w = await warning;
-        return w ? { agentVersion: AGENT_VERSION, warning: w } : { agentVersion: AGENT_VERSION };
-      }
-      case 'inspectEnv': return L.inspectEnv(cmd.compose, cmd.dbUrlEnv);
-      case 'readMarker': return { markers: await L.readMarkers(cmd.db, [cmd.viaService ?? cmd.db.service]) };
-      case 'writeMarker':
-        await L.writeMarker(cmd.db, cmd.envId, cmd.envName);
-        return { envId: cmd.envId };
-      case 'pullImages': return { digests: await pullImages(run, cmd.refs) };
-      case 'snapshotSchema': return { snapshot: await L.snapshotSchema(cmd.db) };
-      case 'dryRunExpand':
-        return L.dryRunExpand(cmd.db, { image: cmd.image, cmd: cmd.cmd, migrationTables: cmd.migrationTables, opId: cmd.opId, env: cmd.env });
-      case 'runCommand':
-        return L.runOneOff(cmd.compose, { service: cmd.service, image: cmd.image, cmd: cmd.cmd, args: cmd.args, env: cmd.env });
-      case 'switchServices': {
-        let proxy: ProxyHook | null = null;
-        if (cmd.proxyMode === 'bundled') {
-          const p = L.bundledProxy(d.stateDir);
-          await p.ensure();
-          proxy = p;
-        }
-        return L.switchServices(cmd.compose, cmd.services, cmd.healthTimeoutS, proxy);
-      }
-      case 'storeImages':
-        await L.storeImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
-        await L.pinImages(cmd.env, cmd.sha, cmd.images);
-        return {};
-      case 'fetchImages':
-        await L.fetchImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
-        return {};
-      case 'deleteImages':
-        await L.deleteImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
-        return {};
-    }
-  }
-
   async function perform(id: string, cmd: Command): Promise<unknown> {
     await ready;
     const compose = composeOf(cmd);
@@ -181,7 +178,7 @@ export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?
         await saveDirs(() => writeAtomic(dirsFile, [...dirs]));
       }
     }
-    const result = await dispatch(cmd);
+    const result = await dispatch(L, run, d.stateDir, warning, cmd);
     if (cmd.type !== 'ping') {
       cache.delete(id);
       cache.set(id, result);
