@@ -108,6 +108,11 @@ export function i18n(lang: Lang): I18n {
   return { lang, t, num, unit, date, ago, left };
 }
 
+export function codeMessage(i: I18n, code: string, params: Record<string, string | number> = {}): string {
+  const p = typeof params.at === 'number' ? { ...params, at: i.date(params.at) } : params;
+  return i.t(`codes.${code}`, p);
+}
+
 export function allKeys(): Record<Lang, string[]> {
   const out = {} as Record<Lang, string[]>;
   for (const lang of LANGS) out[lang] = Object.keys(merged[lang]);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { LANGS, LANG_NAMES, allKeys, fromEnvLocale, i18n, isLang, negotiate } from './index.ts';
+import { LANGS, LANG_NAMES, allKeys, codeMessage, fromEnvLocale, i18n, isLang, negotiate } from './index.ts';
 
 describe('isLang and LANG_NAMES', () => {
   test('LANGS lists the eight supported languages in order', () => {
@@ -188,6 +188,22 @@ describe('date and ago', () => {
   test('ago renders days in the future', () => {
     const now = Date.UTC(2026, 10, 22, 10, 0);
     expect(i18n('en').ago(now + 2 * 864e5, now)).toBe('in 2 days');
+  });
+});
+
+describe('codeMessage', () => {
+  test('formats a numeric at as a human date', () => {
+    const en = i18n('en');
+    const at = Date.UTC(2026, 10, 22, 12, 9);
+    const m = codeMessage(en, 'COMMIT_BLOCKED', { sha: 'bbbbbbb', env: 'production', at });
+    expect(m).toBe(en.t('codes.COMMIT_BLOCKED', { sha: 'bbbbbbb', env: 'production', at: en.date(at) }));
+    expect(m).toContain('Nov 22');
+    expect(m).not.toContain(String(at));
+  });
+
+  test('passes other params through unchanged', () => {
+    const uk = i18n('uk');
+    expect(codeMessage(uk, 'ENV_BUSY', { env: 'staging' })).toBe(uk.t('codes.ENV_BUSY', { env: 'staging' }));
   });
 });
 
