@@ -1164,6 +1164,19 @@ describe('UI routes', () => {
       expect(await repo.getEnv(stagingId)).not.toBeNull();
     });
 
+    it('answers 404 to a repeated delete of the same server', async () => {
+      const edge = await edgeServer();
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(303);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(404);
+    });
+
+    it('deletes a server whose name carries HTML characters when confirmed with the raw name', async () => {
+      await post('/settings/servers', { name: 'a&b"<' });
+      const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
+      expect((await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' })).statusCode).toBe(303);
+      expect(await repo.getServer(odd.id)).toBeNull();
+    });
+
     it('a server can be deleted once its environments are gone', async () => {
       const edge = await edgeServer();
       const qa = await qaEnv(edge.id);
