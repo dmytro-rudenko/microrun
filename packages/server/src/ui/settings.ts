@@ -1,6 +1,7 @@
 import type { I18n } from '@microrun/core/i18n';
 import type { StorageConfig } from '@microrun/core/protocol';
 import type { EnvInput, ServiceSpec } from '../db/repo.ts';
+import { alert, button, checkbox, confirmName, field, input, select, textarea } from './form.ts';
 import { html, raw, tr, type Html } from './html.ts';
 
 const DB_KINDS = ['postgres', 'mysql', 'sqlite', 'mongodb'] as const;
@@ -182,6 +183,55 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
 
 const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 
+const PROXY_OPTIONS = PROXY_MODES.map((m) => ({ value: m, label: m }));
+const LABEL = 'text-sm font-medium text-ink';
+
+const FORM_CLOSE = "var f=this.querySelector('form');f.reset();f.querySelector('button[type=submit]').disabled=true";
+const HX_GATE = "this.closest('dialog').querySelector('button[hx-post]').disabled=this.value!==this.dataset.name";
+const HX_ENTER = "if(event.key==='Enter'){event.preventDefault();var b=this.closest('dialog').querySelector('button[hx-post]');if(!b.disabled)b.click()}";
+const HX_CLOSE = "this.querySelector('[name=confirm_name]').value='';this.querySelector('button[hx-post]').disabled=true";
+
+function deleteDialog(
+  i: I18n,
+  p: { base: string; suffix: string; title: Html; body: Html; expected: string; target: { action: string; csrf: Html } | { hx: Html } },
+): Html {
+  const t = p.target;
+  const hx = 'hx' in t ? t.hx : null;
+  const gate = confirmName({
+    label: tr(i, 'settings.confirmName', { name: p.expected }),
+    expected: p.expected,
+    name: 'confirm_name',
+    testid: `${p.base}-name${p.suffix}`,
+    ...(hx ? { gate: HX_GATE, attrs: html` onkeydown="${HX_ENTER}"` } : {}),
+  });
+  const cancel = button({
+    type: 'button',
+    variant: 'ghost',
+    label: tr(i, 'common.cancel'),
+    attrs: raw(` onclick="this.closest('dialog').close()"`),
+  });
+  const go = button({
+    variant: 'danger',
+    testid: `${p.base}-go${p.suffix}`,
+    disabled: true,
+    label: tr(i, 'settings.delete'),
+    ...(hx ? { type: 'button' as const, attrs: hx } : {}),
+  });
+  const content = html`<h2 class="font-display text-lg font-semibold">${p.title}</h2>
+<p class="text-sm text-mute">${p.body}</p>
+${gate}
+<div class="flex justify-end gap-2">${cancel}${go}</div>`;
+  return html`${button({
+    type: 'button',
+    variant: 'danger',
+    testid: p.base + p.suffix,
+    label: tr(i, 'settings.delete'),
+    attrs: raw(' onclick="this.nextElementSibling.showModal()"'),
+  })}<dialog data-testid="${p.base}-dialog${p.suffix}" onclose="${hx ? HX_CLOSE : FORM_CLOSE}" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
+${'hx' in t ? html`<div class="flex flex-col gap-4">${content}</div>` : html`<form method="post" action="${t.action}" class="flex flex-col gap-4">${t.csrf}
+${content}</form>`}</dialog>`;
+}
+
 export type ServerOption = { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string };
 
 export function serverBlock(
@@ -197,56 +247,104 @@ export function serverBlock(
 ): Html {
   const cur = p.servers.find((s) => s.id === p.selected) ?? p.servers[0]!;
   const hdr = JSON.stringify({ 'x-csrf-token': p.csrf });
+  const hx = (url: string, params: string) => html` hx-post="${url}" hx-params="${params}" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`;
   const created = p.created;
-  return html`<div id="srv" class="srv" data-testid="server-block">
-<select name="server_id" aria-label="${i.t('settings.f.server_id')}" hx-get="/settings/servers/block" hx-target="#srv" hx-swap="outerHTML">
-${p.servers.map((s) => html`<option value="${s.id}"${s.id === cur.id ? ' selected' : ''}>${s.name}</option>`)}
-</select>
-<div class="srv-meta"><span data-testid="agent-status" data-status="${cur.online ? 'online' : 'offline'}">${tr(i, cur.online ? 'agent.online' : 'agent.offline')}${cur.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</span>
-<span>${cur.agentVersion ?? '—'}</span>
-<label>${tr(i, 'settings.servers.proxy')} ${dropdown('proxy_mode', cur.proxyMode, PROXY_MODES.map((m) => ({ value: m, label: m })), html` hx-post="/settings/servers/${cur.id}/proxy" hx-trigger="change" hx-params="proxy_mode" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`)}</label>
-${cur.builtin ? '' : html`<button type="button" data-testid="server-reissue" hx-post="/settings/servers/${cur.id}/token" hx-params="none" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'settings.servers.reissue')}</button>`}
-${p.usedBy.length ? html`<span class="small" data-testid="server-used-by">${tr(i, 'srv.usedBy', { list: p.usedBy.join(', ') })}</span>` : ''}</div>
-${created ? html`<div class="alert ok" role="status"><p>${tr(i, 'settings.servers.created', { name: created.name })}</p><code data-testid="agent-token">${created.token}</code><p>${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command">${created.command}</pre></div>` : ''}
-${p.error ? html`<div class="alert" role="alert" data-testid="server-error">${p.error}</div>` : ''}
-<div class="srv-new"><label>${tr(i, 'srv.add')} <input type="text" name="server_name" data-testid="server-name" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('#srv').querySelector('[data-testid=server-create]').click()}"></label>
-<button type="button" data-testid="server-create" hx-post="/settings/servers" hx-include="#srv [name=server_name], #srv [name=server_id]" hx-params="server_name,server_id" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML">${tr(i, 'srv.createPick')}</button></div>
+  return html`<div id="srv" data-testid="server-block" class="flex flex-col gap-3 rounded-lg border border-line bg-bg p-3">
+${select({
+  name: 'server_id',
+  id: 'f-server_id',
+  current: cur.id,
+  options: p.servers.map((s) => ({ value: s.id, label: s.name })),
+  attrs: html` hx-get="/settings/servers/block" hx-target="#srv" hx-swap="outerHTML"`,
+})}
+<div class="flex flex-wrap items-center gap-3 text-xs text-mute"><span data-testid="agent-status" data-status="${cur.online ? 'online' : 'offline'}" class="${cur.online ? 'text-ok' : 'text-mute'}">${tr(i, cur.online ? 'agent.online' : 'agent.offline')}${cur.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</span>
+<span class="font-mono">${cur.agentVersion ?? '—'}</span>
+<label class="inline-flex items-center gap-2">${tr(i, 'settings.servers.proxy')} ${select({
+  name: 'proxy_mode',
+  compact: true,
+  current: cur.proxyMode,
+  options: PROXY_OPTIONS,
+  attrs: html` hx-post="/settings/servers/${cur.id}/proxy" hx-trigger="change" hx-params="proxy_mode" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`,
+})}</label>
+${p.usedBy.length ? html`<span data-testid="server-used-by">${tr(i, 'srv.usedBy', { list: p.usedBy.join(', ') })}</span>` : ''}</div>
+${cur.builtin ? '' : html`<div class="flex flex-wrap gap-2">${button({
+  type: 'button',
+  variant: 'ghost',
+  testid: 'server-reissue',
+  label: tr(i, 'settings.servers.reissue'),
+  attrs: hx(`/settings/servers/${cur.id}/token`, 'none'),
+})}${deleteDialog(i, {
+  base: 'server-delete',
+  suffix: `-${cur.name}`,
+  title: tr(i, 'settings.servers.deleteTitle', { name: cur.name }),
+  body: tr(i, 'settings.servers.deleteBody'),
+  expected: cur.name,
+  target: { hx: html`${hx(`/settings/servers/${cur.id}/delete`, 'confirm_name')} hx-include="closest dialog"` },
+})}</div>`}
+${
+  created
+    ? alert({
+        tone: 'ok',
+        role: 'status',
+        body: html`<p>${tr(i, 'settings.servers.created', { name: created.name })}</p>
+<code data-testid="agent-token" class="mt-1.5 block font-mono text-[13px] [overflow-wrap:anywhere]">${created.token}</code>
+<p class="mt-2.5">${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command" class="mt-1.5 overflow-x-auto rounded-md bg-code p-2 font-mono text-xs">${created.command}</pre>`,
+      })
+    : ''
+}
+${p.error ? alert({ tone: 'error', role: 'alert', testid: 'server-error', body: html`${p.error}` }) : ''}
+<div class="flex flex-wrap items-end gap-2">${field({
+  id: 'f-server-name',
+  label: tr(i, 'srv.add'),
+  control: input({
+    name: 'server_name',
+    id: 'f-server-name',
+    testid: 'server-name',
+    autocomplete: 'off',
+    attrs: raw(` onkeydown="if(event.key==='Enter'){event.preventDefault();this.closest('#srv').querySelector('[data-testid=server-create]').click()}"`),
+  }),
+})}${button({
+  type: 'button',
+  variant: 'ghost',
+  testid: 'server-create',
+  label: tr(i, 'srv.createPick'),
+  attrs: html` hx-post="/settings/servers" hx-include="#srv [name=server_name], #srv [name=server_id]" hx-params="server_name,server_id" hx-headers="${hdr}" hx-target="#srv" hx-swap="outerHTML"`,
+})}</div>
 </div>`;
 }
-
-interface Option {
-  value: string;
-  label: Html | string;
-}
-
-const dropdown = (name: string, current: string, options: Option[], attrs = raw('')) =>
-  html`<select name="${name}"${attrs}>${options.map((o) => html`<option value="${o.value}"${o.value === current ? ' selected' : ''}>${o.label}</option>`)}</select>`;
-
-const entry = (name: string, value: string, type = 'text') => html`<input type="${type}" name="${name}" value="${value}">`;
-
-const password = (name: string) => html`<input type="password" name="${name}" placeholder="••••" autocomplete="new-password">`;
-
-const checkbox = (name: string, on: boolean) => html`<input type="checkbox" name="${name}"${on ? ' checked' : ''}>`;
 
 function errorsBlock(i: I18n, errors: Record<string, string>): Html | string {
   const entries = Object.entries(errors);
   if (!entries.length) return '';
-  return html`<div class="alert" role="alert" data-testid="env-error"><p>${tr(i, 'settings.env.errors')}</p>
-<ul>${entries.map(([f, m]) => html`<li><b>${fieldLabel(i, f.startsWith('retention') ? 'retention' : f)}</b>: ${i.t(m)}</li>`)}</ul></div>`;
+  return alert({
+    tone: 'error',
+    role: 'alert',
+    testid: 'env-error',
+    body: html`<p>${tr(i, 'settings.env.errors')}</p>
+<ul class="mt-1.5 list-disc pl-5">${entries.map(([f, m]) => html`<li><b>${fieldLabel(i, f.startsWith('retention') ? 'retention' : f)}</b>: ${i.t(m)}</li>`)}</ul>`,
+  });
 }
 
 type BindResult = { ok: boolean; text: string };
 
 const bindResult = (bind: BindResult) =>
-  html`<div class="alert${bind.ok ? ' ok' : ''}" data-testid="bind-result" data-ok="${bind.ok ? 'true' : 'false'}">${bind.text}</div>`;
+  alert({ tone: bind.ok ? 'ok' : 'error', testid: 'bind-result', attrs: raw(` data-ok="${bind.ok ? 'true' : 'false'}"`), body: html`${bind.text}` });
 
 const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: BindResult | undefined) =>
-  html`<form method="post" action="/settings/env/${id}/bind#settings">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
-${bind ? bindResult(bind) : ''}
-<form method="post" action="/settings/env/${id}/token#settings">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`;
+  html`<div class="flex max-w-3xl flex-col gap-3"><div class="flex flex-wrap gap-2"><form method="post" action="/settings/env/${id}/bind#settings">${csrf}${button({
+    variant: 'ghost',
+    testid: 'env-bind-db',
+    label: tr(i, 'settings.env.bind'),
+  })}</form>
+<form method="post" action="/settings/env/${id}/token#settings">${csrf}${button({ variant: 'ghost', label: tr(i, 'settings.env.reissue') })}</form></div>
+${bind ? bindResult(bind) : ''}</div>`;
 
 const deployTokenBlock = (i: I18n, token: string) =>
-  html`<div class="alert ok" role="status"><p>${tr(i, 'settings.env.tokenShown')}</p><code data-testid="deploy-token">${token}</code></div>`;
+  alert({
+    tone: 'ok',
+    role: 'status',
+    body: html`<p>${tr(i, 'settings.env.tokenShown')}</p><code data-testid="deploy-token" class="mt-1.5 block font-mono text-[13px] [overflow-wrap:anywhere]">${token}</code>`,
+  });
 
 export function envFormView(
   i: I18n,
@@ -259,58 +357,92 @@ export function envFormView(
     deployToken?: string;
     bind?: BindResult;
     rollingHint?: boolean;
+    deleteError?: string;
+    storedName?: string;
   },
 ): Html {
   const v = (k: keyof EnvFormValues) => p.values[k] ?? '';
   const csrf = html`<input type="hidden" name="_csrf" value="${p.csrf}">`;
   const label = (name: string) => fieldLabel(i, name);
-  const field = (name: string, control: Html, hint?: string) =>
-    html`<label class="f"><span>${label(name)}</span>${control}${hint ? html`<small>${tr(i, `settings.h.${hint}`)}</small>` : ''}</label>`;
+  const fld = (name: string, control: Html, hint?: string) =>
+    field({ id: `f-${name}`, label: label(name), control, hint: hint ? tr(i, `settings.h.${hint}`) : undefined });
+  const text = (name: keyof EnvFormValues, type?: 'number') => input({ name, id: `f-${name}`, value: v(name), type });
+  const secret = (name: string) => input({ name, id: `f-${name}`, type: 'password', placeholder: '••••', autocomplete: 'new-password' });
+  const area = (name: keyof EnvFormValues, rows: number) => textarea({ name, id: `f-${name}`, value: v(name), rows });
+  const check = (name: keyof EnvFormValues, checked: boolean) => checkbox({ name, id: `f-${name}`, checked, label: label(name) });
   const kind = v('storage_kind') || 'local';
   const id = p.values.id;
   const isProduction = v('is_production') !== '';
 
+  const section = (title: Html, body: Html) =>
+    html`<fieldset class="flex flex-col gap-5 rounded-xl border border-line bg-surface p-5"><legend class="px-1 font-display text-sm font-semibold">${title}</legend>
+<div class="grid gap-5 sm:grid-cols-2">${body}</div></fieldset>`;
   const group = (k: (typeof STORAGE_KINDS)[number], body: Html) =>
-    html`<div class="kind" data-kind="${k}"${k === kind ? '' : ' hidden'}>${body}</div>`;
+    html`<div data-kind="${k}" class="gap-5 sm:col-span-2 sm:grid-cols-2 [&:not([hidden])]:grid"${k === kind ? '' : raw(' hidden')}>${body}</div>`;
 
-  return html`${errorsBlock(i, p.errors)}
-${p.rollingHint ? html`<div class="alert w" role="status" data-testid="rolling-hint">${tr(i, 'settings.env.rollingHint')}</div>` : ''}
-<form method="post" action="/settings/env#settings" class="envform">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
-<fieldset><legend>${tr(i, 'settings.sec.general')}</legend>
-${field('name', entry('name', v('name')))}
-${field('branch', entry('branch', v('branch')))}
-${field('is_production', checkbox('is_production', isProduction))}
-<div class="f"><span>${label('server_id')}</span>${p.serverBlock}</div>
-${field('position', entry('position', v('position'), 'number'))}
-</fieldset>
-<fieldset><legend>${tr(i, 'settings.sec.compose')}</legend>
-${field('compose_project', entry('compose_project', v('compose_project')))}
-${field('compose_dir', entry('compose_dir', v('compose_dir')))}
-${field('compose_files', html`<textarea name="compose_files" rows="3">${v('compose_files')}</textarea>`, 'compose_files')}
-${field('compose_env_files', html`<textarea name="compose_env_files" rows="2">${v('compose_env_files')}</textarea>`, 'compose_env_files')}
-${field('services', html`<textarea name="services" rows="4">${v('services')}</textarea>`, 'services')}
-</fieldset>
-<fieldset><legend>${tr(i, 'settings.sec.database')}</legend>
-${field('migration_service', entry('migration_service', v('migration_service')))}
-${field('db_kind', dropdown('db_kind', v('db_kind'), DB_KINDS.map((k) => ({ value: k, label: k }))))}
-${field('db_url_env', entry('db_url_env', v('db_url_env')))}
-${field('migration_tables', html`<textarea name="migration_tables" rows="3">${v('migration_tables')}</textarea>`, 'migration_tables')}
-${field('schema_check', dropdown('schema_check', v('schema_check') || (isProduction ? 'dry_run' : 'post_check'), SCHEMA_CHECKS.map((k) => ({ value: k, label: tr(i, `settings.opt.${k}`) }))), 'schema_check')}
-</fieldset>
-<fieldset><legend>${tr(i, 'settings.sec.commands')}</legend>
-${field('expand_cmd', entry('expand_cmd', v('expand_cmd')))}
-${field('contract_cmd', entry('contract_cmd', v('contract_cmd')))}
-${field('cleanup_cmd', entry('cleanup_cmd', v('cleanup_cmd')))}
-${field('health_timeout_s', entry('health_timeout_s', v('health_timeout_s'), 'number'))}
-</fieldset>
-<fieldset><legend>${tr(i, 'settings.sec.storage')}</legend>
-${field('storage_kind', dropdown('storage_kind', kind, STORAGE_KINDS.map((k) => ({ value: k, label: tr(i, `storage.${k}`) })), raw(` onchange="for(const g of this.form.querySelectorAll('.kind'))g.hidden=g.dataset.kind!==this.value"`)))}
-${group('local', field('storage_path', entry('storage_path', v('storage_path'))))}
-${group('registry', html`${field('storage_registry', entry('storage_registry', v('storage_registry')))}${field('storage_repository', entry('storage_repository', v('storage_repository')))}${field('storage_username', entry('storage_username', v('storage_username')))}${field('storage_password', password('storage_password'), 'secret')}`)}
-${group('s3', html`${field('storage_endpoint', entry('storage_endpoint', v('storage_endpoint')))}${field('storage_region', entry('storage_region', v('storage_region')))}${field('storage_bucket', entry('storage_bucket', v('storage_bucket')))}${field('storage_prefix', entry('storage_prefix', v('storage_prefix')))}${field('storage_access_key', entry('storage_access_key', v('storage_access_key')))}${field('storage_secret_key', password('storage_secret_key'), 'secret')}${field('storage_force_path_style', checkbox('storage_force_path_style', v('storage_force_path_style') !== ''))}`)}
-${field('retention', html`<span class="inline">${entry('retention_value', v('retention_value'), 'number')}${dropdown('retention_unit', v('retention_unit') || 'days', UNITS.map((u) => ({ value: u, label: tr(i, `settings.opt.${u}`) })))}</span>`, 'retention')}
-</fieldset>
-<button type="submit" data-testid="env-save">${tr(i, 'settings.env.save')}</button></form>
+  const alerts = [
+    errorsBlock(i, p.errors),
+    p.rollingHint ? alert({ tone: 'warn', role: 'status', testid: 'rolling-hint', body: tr(i, 'settings.env.rollingHint') }) : '',
+    p.deleteError ? alert({ tone: 'error', role: 'alert', testid: 'env-delete-error', body: html`${p.deleteError}` }) : '',
+  ].filter(Boolean);
+
+  return html`<div class="flex flex-col gap-4">
+${alerts.length ? html`<div class="flex max-w-3xl flex-col gap-3">${alerts}</div>` : ''}
+<form method="post" action="/settings/env#settings" class="flex max-w-3xl flex-col gap-6">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
+${section(tr(i, 'settings.sec.general'), html`${fld('name', text('name'))}
+${fld('branch', text('branch'))}
+${check('is_production', isProduction)}
+<div class="flex flex-col gap-1.5 sm:col-span-2"><label for="f-server_id" class="${LABEL}">${label('server_id')}</label>${p.serverBlock}</div>
+${fld('position', text('position', 'number'))}`)}
+${section(tr(i, 'settings.sec.compose'), html`${fld('compose_project', text('compose_project'))}
+${fld('compose_dir', text('compose_dir'))}
+${fld('compose_files', area('compose_files', 3), 'compose_files')}
+${fld('compose_env_files', area('compose_env_files', 2), 'compose_env_files')}
+${fld('services', area('services', 4), 'services')}`)}
+${section(tr(i, 'settings.sec.database'), html`${fld('migration_service', text('migration_service'))}
+${fld('db_kind', select({ name: 'db_kind', id: 'f-db_kind', current: v('db_kind'), options: DB_KINDS.map((k) => ({ value: k, label: k })) }))}
+${fld('db_url_env', text('db_url_env'))}
+${fld('migration_tables', area('migration_tables', 3), 'migration_tables')}
+${fld('schema_check', select({ name: 'schema_check', id: 'f-schema_check', current: v('schema_check') || (isProduction ? 'dry_run' : 'post_check'), options: SCHEMA_CHECKS.map((k) => ({ value: k, label: tr(i, `settings.opt.${k}`) })) }), 'schema_check')}`)}
+${section(tr(i, 'settings.sec.commands'), html`${fld('expand_cmd', text('expand_cmd'))}
+${fld('contract_cmd', text('contract_cmd'))}
+${fld('cleanup_cmd', text('cleanup_cmd'))}
+${fld('health_timeout_s', text('health_timeout_s', 'number'))}`)}
+${section(tr(i, 'settings.sec.storage'), html`${fld('storage_kind', select({
+    name: 'storage_kind',
+    id: 'f-storage_kind',
+    current: kind,
+    options: STORAGE_KINDS.map((k) => ({ value: k, label: tr(i, `storage.${k}`) })),
+    attrs: raw(` onchange="for(const g of this.form.querySelectorAll('[data-kind]'))g.hidden=g.dataset.kind!==this.value"`),
+  }))}
+${group('local', fld('storage_path', text('storage_path')))}
+${group('registry', html`${fld('storage_registry', text('storage_registry'))}${fld('storage_repository', text('storage_repository'))}${fld('storage_username', text('storage_username'))}${fld('storage_password', secret('storage_password'), 'secret')}`)}
+${group('s3', html`${fld('storage_endpoint', text('storage_endpoint'))}${fld('storage_region', text('storage_region'))}${fld('storage_bucket', text('storage_bucket'))}${fld('storage_prefix', text('storage_prefix'))}${fld('storage_access_key', text('storage_access_key'))}${fld('storage_secret_key', secret('storage_secret_key'), 'secret')}${check('storage_force_path_style', v('storage_force_path_style') !== '')}`)}
+${field({
+    id: 'f-retention',
+    label: label('retention'),
+    hint: tr(i, 'settings.h.retention'),
+    control: html`<div class="flex gap-2">${input({ name: 'retention_value', id: 'f-retention', type: 'number', value: v('retention_value') })}${select({
+      name: 'retention_unit',
+      compact: true,
+      current: v('retention_unit') || 'days',
+      options: UNITS.map((u) => ({ value: u, label: tr(i, `settings.opt.${u}`) })),
+    })}</div>`,
+  })}`)}
+${button({ testid: 'env-save', label: tr(i, 'settings.env.save') })}</form>
 ${p.isNew ? '' : envActions(i, id, csrf, p.bind)}
-${p.deployToken ? deployTokenBlock(i, p.deployToken) : ''}`;
+${p.deployToken ? deployTokenBlock(i, p.deployToken) : ''}
+${
+  !p.isNew && id
+    ? html`<section class="mt-8 flex max-w-3xl flex-col gap-3 rounded-xl border border-prod p-5"><h2 class="font-display text-base font-semibold text-prod">${tr(i, 'settings.env.dangerZone')}</h2><p class="text-sm text-mute">${tr(i, 'settings.env.deleteBody')}</p>${deleteDialog(i, {
+        base: 'env-delete',
+        suffix: '',
+        target: { action: `/settings/env/${id}/delete`, csrf },
+        title: tr(i, 'settings.env.deleteTitle', { name: p.storedName ?? v('name') }),
+        body: tr(i, 'settings.env.deleteBody'),
+        expected: p.storedName ?? v('name'),
+      })}</section>`
+    : ''
+}
+</div>`;
 }

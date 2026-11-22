@@ -529,7 +529,7 @@ describe('UI routes', () => {
       const free = await busy();
       const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(409);
-      expect(res.body).toMatch(/<div class="alert"[^>]*role="alert"/);
+      expect(res.body).toMatch(/<div[^>]*role="alert"/);
       expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
       expect(res.headers['hx-retarget']).toBe('#panel-alert');
       expect(res.headers['hx-reswap']).toBe('innerHTML');
@@ -856,7 +856,7 @@ describe('UI routes', () => {
     it('reports a bound database with data-ok true', async () => {
       const res = await post(`/settings/env/${prodId}/bind`);
       expect(res.statusCode).toBe(200);
-      expect(res.body).toContain('data-testid="bind-result" data-ok="true"');
+      expect(res.body).toMatch(/data-testid="bind-result"[^>]*data-ok="true"/);
       expect(res.body).toContain(`${en.t('settings.env.bind')}: ${en.t('common.yes')}`);
     });
 
@@ -1009,7 +1009,7 @@ describe('UI routes', () => {
       expect(rowCount(await history(prodId))).toBe(2);
       expect(rows.indexOf(`${A7} → ${B7}`)).toBeLessThan(rows.indexOf(`— → ${A7}`));
       expect(rows).toContain(en.t('actor.ci', { name: 'alice' }));
-      expect(rows.match(/class="ok"/g)).toHaveLength(2);
+      expect(rows.match(/data-status="ok"/g)).toHaveLength(2);
     });
 
     it('shows only the operations of its own env', async () => {
@@ -1022,7 +1022,7 @@ describe('UI routes', () => {
     it('shows the reason of a rejected operation', async () => {
       await destructiveRejection();
       const rows = tbody(await history(prodId));
-      expect(rows).toContain('class="bad"');
+      expect(rows).toMatch(/data-status="(failed|rejected)"/);
       expect(rows).toContain(codeMessage(en, 'SCHEMA_DESTRUCTIVE', { objects: 'users', col: 'users' }));
       expect(rowCount(await history(prodId))).toBe(2);
     });
@@ -1071,6 +1071,16 @@ describe('UI routes', () => {
       await db('releases').where({ id: relA.id }).update({ stored: 0 });
       expect((await get('/')).body).toContain(warn);
       expect((await get(`/panel/${relA.id}`)).body).toContain(warn);
+    });
+
+    it('does not warn about storage while the deploy of that release is still running', async () => {
+      await deploy(A);
+      const relA = await release(A);
+      const warn = en.t('storage.failedWarn');
+      await db('releases').where({ id: relA.id }).update({ stored: 0 });
+      await db('operations').where({ to_release_id: relA.id, kind: 'deploy' }).update({ status: 'running', finished_at: null });
+      expect((await get('/')).body).not.toContain(warn);
+      expect((await get(`/panel/${relA.id}`)).body).not.toContain(warn);
     });
 
     it('reads at most 200 operations per env to render the board and a panel', async () => {
@@ -1132,7 +1142,7 @@ describe('UI routes', () => {
       const body = (await get(`/env/${prodId}`)).body;
       for (const id of ['releases', 'history', 'settings']) expect(body).toContain(`<section id="${id}"`);
       expect(section(body, 'settings')).toContain('action="/settings/env#settings"');
-      expect(body).toContain('class="jump prod"');
+      expect(body).toContain('class="jump prod ');
     });
 
     it('shows the last 5 operations and all of them on ?history=all', async () => {
@@ -1187,6 +1197,170 @@ describe('UI routes', () => {
       expect(res.statusCode).toBe(422);
       expect(res.body).toContain('<section id="releases"');
       expect(res.body).toContain('data-testid="env-error"');
+    });
+  });
+
+  describe('UI polish', () => {
+    const edgeServer = async () => {
+      await post('/settings/servers', { server_name: 'edge' });
+      return (await repo.listServers()).find((s) => s.name === 'edge')!;
+    };
+    const qaEnv = (sid: string) =>
+      repo.saveEnv(envInput({ name: 'qa', branch: 'qa', isProduction: false, position: 2, serverId: sid, project: 'shop-qa', token: 'deploy-token-qa' }));
+
+    it('deletes a remote server without environments, disconnects its agent and re-renders the block on the default server', async () => {
+      const edge = await edgeServer();
+      const spy = vi.spyOn(hub, 'disconnect');
+      const res = await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' });
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('id="srv"');
+      expect(res.body).toMatch(new RegExp(`<option value="${serverId}" selected`));
+      expect(res.body).not.toContain(`<option value="${edge.id}"`);
+      expect(await repo.getServer(edge.id)).toBeNull();
+      expect(spy).toHaveBeenCalledWith(edge.id);
+    });
+
+    it('refuses the builtin server with 409', async () => {
+      const res = await post(`/settings/servers/${serverId}/delete`, { confirm_name: 'main' });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toContain(en.t('settings.servers.deleteBuiltin'));
+      expect(await repo.getServer(serverId)).not.toBeNull();
+    });
+
+    it('refuses a server that still has environments with 409 and the count', async () => {
+      const edge = await edgeServer();
+      await qaEnv(edge.id);
+      const res = await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toContain(en.t('settings.servers.deleteHasEnvs', { name: 'edge', n: 1 }));
+      expect(await repo.getServer(edge.id)).not.toBeNull();
+    });
+
+    it('answers 400 on a wrong confirm_name, 404 on an unknown server, 403 without csrf', async () => {
+      const edge = await edgeServer();
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edg' })).statusCode).toBe(400);
+      expect(await repo.getServer(edge.id)).not.toBeNull();
+      expect((await post('/settings/servers/nope/delete', { confirm_name: 'nope' })).statusCode).toBe(404);
+      const bare = await app.inject({
+        method: 'POST',
+        url: `/settings/servers/${edge.id}/delete`,
+        payload: 'confirm_name=edge',
+        headers: { cookie: ui.cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      });
+      expect(bare.statusCode).toBe(403);
+    });
+
+    it('does not disconnect any agent on a 400, 409 or 404 server delete', async () => {
+      const edge = await edgeServer();
+      const spy = vi.spyOn(hub, 'disconnect');
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edg' })).statusCode).toBe(400);
+      await qaEnv(edge.id);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(409);
+      expect((await post('/settings/servers/nope/delete', { confirm_name: 'nope' })).statusCode).toBe(404);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
+    it('deletes an idle environment with its releases, operations and approvals', async () => {
+      await deploy(A);
+      await idle();
+      await repo.putApproval({ envId: prodId, commitSha: B, diff: [], approvedAt: now });
+      const res = await post(`/settings/env/${prodId}/delete`, { confirm_name: 'production' });
+      expect(res.statusCode).toBe(303);
+      expect(res.headers.location).toBe('/');
+      expect(await repo.getEnv(prodId)).toBeNull();
+      for (const t of ['releases', 'operations', 'destructive_approvals']) expect(await db(t).where({ env_id: prodId }), t).toEqual([]);
+      expect((await get('/')).body).not.toContain('data-testid="col-production"');
+    });
+
+    it('refuses to delete an environment with an operation in progress', async () => {
+      const free = await busy();
+      const res = await post(`/settings/env/${prodId}/delete`, { confirm_name: 'production' });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toContain(en.t('settings.env.deleteBusy', { name: 'production' }));
+      expect(await repo.getEnv(prodId)).not.toBeNull();
+      await free();
+    });
+
+    it('answers 400 on a wrong env confirm_name and 404 on an unknown env', async () => {
+      expect((await post(`/settings/env/${stagingId}/delete`, { confirm_name: 'stag' })).statusCode).toBe(400);
+      expect(await repo.getEnv(stagingId)).not.toBeNull();
+      expect((await post('/settings/env/nope/delete', { confirm_name: 'nope' })).statusCode).toBe(404);
+      const bare = await app.inject({
+        method: 'POST',
+        url: `/settings/env/${stagingId}/delete`,
+        payload: 'confirm_name=staging',
+        headers: { cookie: ui.cookie, 'content-type': 'application/x-www-form-urlencoded' },
+      });
+      expect(bare.statusCode).toBe(403);
+      expect(await repo.getEnv(stagingId)).not.toBeNull();
+    });
+
+    it('escapes a server name exactly once in the has-envs error', async () => {
+      await post('/settings/servers', { server_name: 'a&b"<' });
+      const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
+      await qaEnv(odd.id);
+      const res = await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toContain('a&amp;b&quot;&lt;');
+      expect(res.body).not.toContain('&amp;amp;');
+    });
+
+    it('answers 404 to a repeated delete of the same environment', async () => {
+      expect((await post(`/settings/env/${stagingId}/delete`, { confirm_name: 'staging' })).statusCode).toBe(303);
+      expect((await post(`/settings/env/${stagingId}/delete`, { confirm_name: 'staging' })).statusCode).toBe(404);
+    });
+
+    it('asks for the stored name in the delete dialog after a failed save', async () => {
+      const res = await post('/settings/env', { id: stagingId, name: 'renamed', branch: '' });
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toMatch(/data-testid="env-delete-name"[^>]*data-name="staging"/);
+    });
+
+    it('answers 404 to a repeated delete of the same server', async () => {
+      const edge = await edgeServer();
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(200);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(404);
+    });
+
+    it('deletes a server whose name carries HTML characters when confirmed with the raw name', async () => {
+      await post('/settings/servers', { server_name: 'a&b"<' });
+      const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
+      expect((await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' })).statusCode).toBe(200);
+      expect(await repo.getServer(odd.id)).toBeNull();
+    });
+
+    it('a server can be deleted once its environments are gone', async () => {
+      const edge = await edgeServer();
+      const qa = await qaEnv(edge.id);
+      expect((await post(`/settings/env/${qa.id}/delete`, { confirm_name: 'qa' })).statusCode).toBe(303);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(200);
+    });
+
+    it('binds a database whose marker belongs to a deleted environment', async () => {
+      markers['shop-qa'] = { envId: '99999999-9999-4999-8999-999999999999', envName: 'old-qa' };
+      const qa = await qaEnv(serverId);
+      const res = await post(`/settings/env/${qa.id}/bind`);
+      expect(res.body).toMatch(/data-testid="bind-result"[^>]*data-ok="true"/);
+      expect((await repo.getEnv(qa.id))!.dbMarkerId).not.toBeNull();
+    });
+
+    it('renders the UI in English without a cookie, ignoring Accept-Language', async () => {
+      const page = await app.inject({ method: 'GET', url: '/', headers: { cookie: ui.cookie, accept: 'text/html', 'accept-language': 'de' } });
+      expect(page.body).toContain('<html lang="en">');
+    });
+
+    it('lists English first in the header language select', async () => {
+      const body = (await get('/')).body;
+      const at = body.indexOf('data-testid="lang"');
+      const select = body.slice(at, body.indexOf('</select>', at));
+      expect([...select.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1])[0]).toBe('en');
+    });
+
+    it('serves the real login page in the language chosen by GET /login?lang=uk', async () => {
+      const res = await app.inject({ method: 'GET', url: '/login?lang=uk' });
+      expect(res.body).toContain('<html lang="uk">');
+      expect(res.body).toContain(i18n('uk').t('login.tagline'));
+      expect(res.cookies.find((c) => c.name === 'mr_lang')?.value).toBe('uk');
     });
   });
 });

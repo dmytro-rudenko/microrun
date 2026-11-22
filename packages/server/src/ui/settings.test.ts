@@ -52,6 +52,9 @@ const textOf = (out: string, testid: string) =>
   new RegExp(`<[^>]*data-testid="${testid}"[^>]*>([\\s\\S]*?)</`).exec(out)?.[1];
 const inputTag = (out: string, name: string) => new RegExp(`<input[^>]*\\bname="${name}"[^>]*>`).exec(out)?.[0];
 const hasAttr = (tag: string, attr: string) => new RegExp(`\\s${attr}(?=[\\s=>/])`).test(tag);
+const bareDisplayOnHidden = (out: string) =>
+  /<[a-z]+(?=[^>]*\shidden[\s>])[^>]*class="(?:[^"]*\s)?(flex|grid|block)(?:\s[^"]*)?"/.test(out) ||
+  /<dialog[^>]*class="(?:[^"]*\s)?(flex|grid|block)(?:\s[^"]*)?"/.test(out);
 
 function expectNoRawKeys(lang: Lang, view: string, out: string) {
   const keys = allKeys()[lang].filter((k) => /^[A-Za-z]\w*(\.\w+)+$/.test(k));
@@ -373,6 +376,30 @@ describe('loginView', () => {
     expectNoRawKeys(lang, 'loginView', out);
     if (lang !== 'en') expect(out).not.toBe(loginView(en, { error: true, csrf: 'tok' }));
   });
+
+  test('has the console brand panel, hidden below lg, with the translated tagline', () => {
+    const out = loginView(en, { error: false });
+    expect(tagOf(out, 'login-panel')).toMatch(/\bhidden\b[^"]*\blg:flex\b/);
+    expect(out).toContain(en.t('login.tagline'));
+    expect(out).toContain('<svg');
+  });
+
+  test('has a GET language switch to /login, English first, current selected', () => {
+    const out = loginView(i18n('uk'), { error: false });
+    const form = /<form[^>]*method="get"[^>]*>[\s\S]*?<\/form>/i.exec(out)?.[0] ?? '';
+    expect(form).toMatch(/action="\/login"/);
+    expect([...form.matchAll(/<option value="([^"]+)"/g)].map((m) => m[1])).toEqual([...LANGS]);
+    expect(form).toMatch(/<option value="uk"[^>]*selected/);
+    expect(tagOf(out, 'login-lang')).toMatch(/^<select/);
+  });
+
+  test('labels the show-password button from the catalog', () => {
+    expect(tagOf(loginView(en, { error: false }), 'login-show-password')).toContain(`aria-label="${en.t('login.showPassword')}"`);
+  });
+
+  test('puts no bare display utility on hidden elements or dialogs', () => {
+    expect(bareDisplayOnHidden(loginView(en, { error: true }))).toBe(false);
+  });
 });
 
 describe('serverBlock', () => {
@@ -551,6 +578,47 @@ describe('serverBlock', () => {
     expectNoRawKeys(lang, 'serverBlock', render(lang));
     if (lang !== 'en') expect(render(lang)).not.toBe(render('en'));
   });
+
+  test('offers a name-gated delete dialog for a selected remote server only', () => {
+    expect(tagOf(block({ selected: 's1' }), 'server-delete-local')).toBeUndefined();
+    const out = block({ selected: 's2' });
+    expect(tagOf(out, 'server-delete-edge')).toMatch(/type="button"/);
+    const dialog = /<dialog[^>]*data-testid="server-delete-dialog-edge"[\s\S]*?<\/dialog>/.exec(out)?.[0] ?? '';
+    expect(tagOf(dialog, 'server-delete-go-edge')).toContain('hx-post="/settings/servers/s2/delete"');
+    expect(tagOf(dialog, 'server-delete-go-edge')).toContain(`hx-headers="${hdr}"`);
+    expect(tagOf(dialog, 'server-delete-go-edge')).toContain('hx-params="confirm_name"');
+    expect(tagOf(dialog, 'server-delete-go-edge')).toContain('hx-target="#srv"');
+    expect(tagOf(dialog, 'server-delete-name-edge')).toMatch(/name="confirm_name"/);
+    expect(tagOf(dialog, 'server-delete-name-edge')).toMatch(/data-name="edge"/);
+    expect(hasAttr(tagOf(dialog, 'server-delete-go-edge')!, 'disabled')).toBe(true);
+    expect(bareDisplayOnHidden(out)).toBe(false);
+  });
+
+  test('the delete dialog onclose clears its confirm field and disables its delete button again', () => {
+    const open = /<dialog[^>]*data-testid="server-delete-dialog-edge"[^>]*>/.exec(block({ selected: 's2' }))?.[0] ?? '';
+    expect(open).toMatch(/onclose="[^"]*value=&#39;&#39;[^"]*disabled=true/);
+  });
+
+  test('the delete confirm field gates the dialog button, not the env form submit, and does not submit the env form on Enter', () => {
+    const tag = tagOf(block({ selected: 's2' }), 'server-delete-name-edge')!;
+    expect(tag).toContain('closest(&#39;dialog&#39;)');
+    expect(tag).not.toContain('this.form');
+    expect(tag).toContain('preventDefault');
+  });
+
+  test('escapes a hostile server name in the dialog title, label and data-name without leaking a raw character', () => {
+    const name = 'a&b"<';
+    const escaped = 'a&amp;b&quot;&lt;';
+    const out = block({ servers: [servers[0]!, { ...servers[1]!, name }], selected: 's2' });
+    const dialog = /<dialog[\s\S]*?<\/dialog>/.exec(out)?.[0] ?? '';
+    expect(dialog).not.toBe('');
+    expect(inputTag(dialog, 'confirm_name')).toContain(`data-name="${escaped}"`);
+    expect(dialog).toMatch(/<h2[^>]*>[^<]*Delete server a&amp;b&quot;&lt;\?<\/h2>/);
+    expect(dialog).toContain(`Type ${escaped} to confirm`);
+    expect(out).not.toContain(name);
+    expect(out).not.toMatch(/a&(?!amp;)/);
+    expect(out).not.toMatch(/b"</);
+  });
 });
 
 describe('envFormView', () => {
@@ -623,7 +691,7 @@ describe('envFormView', () => {
   });
 
   test('the env form posts to /settings/env#settings', () => {
-    expect(view()).toContain('<form method="post" action="/settings/env#settings" class="envform">');
+    expect(view()).toMatch(/<form method="post" action="\/settings\/env#settings"[ >]/);
   });
 
   test('the bind and token actions post to their routes with the #settings anchor', () => {
@@ -724,5 +792,24 @@ describe('envFormView', () => {
       expectNoRawKeys(lang, `envFormView ${kind}`, out);
       if (lang !== 'en') expect(out).not.toBe(render('en', kind));
     }
+  });
+
+  test('an existing env has a danger zone with a name-gated delete dialog', () => {
+    const out = view({}, { id: 'env-1' });
+    expect(out).toContain(en.t('settings.env.dangerZone'));
+    expect(tagOf(out, 'env-delete')).toMatch(/type="button"/);
+    const dialog = /<dialog[^>]*data-testid="env-delete-dialog"[\s\S]*?<\/dialog>/.exec(out)?.[0] ?? '';
+    expect(dialog).toMatch(/<form[^>]*action="\/settings\/env\/env-1\/delete"/);
+    expect(tagOf(dialog, 'env-delete-name')).toMatch(/data-name="staging"/);
+    expect(hasAttr(tagOf(dialog, 'env-delete-go')!, 'disabled')).toBe(true);
+    expect(bareDisplayOnHidden(out)).toBe(false);
+  });
+
+  test('a new env offers no delete', () => {
+    expect(tagOf(view({ isNew: true }), 'env-delete')).toBeUndefined();
+  });
+
+  test('shows a delete error', () => {
+    expect(textOf(view({ deleteError: 'busy text' } as never, { id: 'env-1' }), 'env-delete-error')).toContain('busy text');
   });
 });

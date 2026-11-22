@@ -205,3 +205,5 @@ pnpm test          # unit and integration tests
 pnpm test:docker   # agent tests against a real Docker engine
 pnpm test:e2e      # Playwright, the full scenario
 ```
+
+The stylesheet `packages/server/src/public/app.css` is generated from `app.src.css` by `pnpm -r build` and is gitignored; run `pnpm --filter @microrun/server dev:css` in a second terminal to rebuild it on change.

@@ -38,6 +38,7 @@ function release(over: Partial<ReleaseVM> = {}): ReleaseVM {
     activationSeq: null,
     imagePurged: false,
     stored: true,
+    storing: false,
     cleanupFailed: null,
     ...over,
   };
@@ -125,6 +126,7 @@ const tagOf = (out: string, testid: string) =>
 const isDisabled = (tag: string) => /\sdisabled(?=[\s=>/])/.test(tag);
 
 const parts = { history: html`<p>H</p>`, settings: html`<p>S</p>` };
+const tdTags = (out: string) => out.match(/<td[\s>][^>]*>/g) ?? [];
 
 describe('html and raw', () => {
   test('html escapes markup in interpolated values', () => {
@@ -172,7 +174,7 @@ describe('boardView', () => {
 
   test('the column heading carries no settings link', () => {
     const out = boardView(i, [env('stage')], NOW).__html;
-    const heading = /<div class="ch">.*?<\/div>/s.exec(out)?.[0];
+    const heading = /<div class="flex items-center justify-between gap-2">.*?<\/div>/s.exec(out)?.[0];
     expect(heading).toBeDefined();
     expect(heading).not.toContain('env-settings');
   });
@@ -297,7 +299,7 @@ describe('envView', () => {
 
   test('a production env gets a prod jump nav carrying the PRODUCTION tag', () => {
     const out = envView(i, env('prod'), NOW, parts).__html;
-    expect(tagOf(out, 'env-jump')).toContain('class="jump prod"');
+    expect(tagOf(out, 'env-jump')).toContain('class="jump prod ');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
     expect(nav).toContain('PRODUCTION');
   });
@@ -305,7 +307,7 @@ describe('envView', () => {
   test('a non-production env gets a plain jump nav without the prod tag', () => {
     const out = envView(i, env('stage'), NOW, parts).__html;
     const tag = tagOf(out, 'env-jump');
-    expect(tag).toContain('class="jump"');
+    expect(tag).toContain('class="jump ');
     expect(tag).not.toContain('jump prod');
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
     expect(nav).not.toContain('PRODUCTION');
@@ -363,6 +365,12 @@ describe('envView', () => {
     const out = envView(i, e, NOW, parts).__html;
     expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
   });
+
+  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
+    const cells = tdTags(envView(i, env('stage'), NOW, parts).__html);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
+  });
 });
 
 describe('newEnvView', () => {
@@ -370,8 +378,8 @@ describe('newEnvView', () => {
 
   test('shows a back link, the new-environment title, the hint and the settings part in the settings section', () => {
     const out = newEnvView(i, html`<p>S</p>`).__html;
-    expect(out).toContain(`<a class="back" href="/">${i.t('env.back')}</a>`);
-    expect(out).toContain(`<h1>${i.t('settings.env.newTitle')}</h1>`);
+    expect(out).toMatch(new RegExp(`<a href="/"[^>]*>${i.t('env.back')}</a>`));
+    expect(out).toMatch(new RegExp(`<h1[^>]*>${i.t('settings.env.newTitle')}</h1>`));
     expect(out).toContain(i.t('env.newHint'));
     expect(out).toContain('<section id="settings"><p>S</p></section>');
     expect(out).not.toContain('data-testid="env-jump"');
@@ -475,6 +483,12 @@ describe('envHistory', () => {
     expect(out).toContain(EVIL_ESCAPED);
     expect(out).not.toContain('&amp;lt;');
   });
+
+  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
+    const cells = tdTags(envHistory(i, [op()], 'env-stage', false).__html);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
+  });
 });
 
 describe('layout', () => {
@@ -483,7 +497,7 @@ describe('layout', () => {
 
   test('the header has a brand link home and a New environment link to /env/new', () => {
     const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
-    expect(header).toContain('<a href="/" class="brand"><b>microrun</b></a>');
+    expect(header).toMatch(/<a href="\/"[^>]*><b[^>]*>(?:<span[^>]*>[^<]*<\/span>)?microrun<\/b><\/a>/);
     expect(tagOf(page, 'env-new')).toContain('href="/env/new"');
     expect(header).toContain(`>${i.t('env.newEnv')}</a>`);
   });

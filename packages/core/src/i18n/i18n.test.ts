@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { LANGS, LANG_NAMES, allKeys, codeMessage, codePlain, fromEnvLocale, i18n, isLang, negotiate } from './index.ts';
+import { LANGS, LANG_NAMES, allKeys, codeMessage, codePlain, fromEnvLocale, i18n, isLang, negotiate, webLang } from './index.ts';
 
 describe('isLang and LANG_NAMES', () => {
   test('LANGS lists the eight supported languages in order', () => {
-    expect([...LANGS]).toEqual(['uk', 'en', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN']);
+    expect([...LANGS]).toEqual(['en', 'uk', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN']);
   });
 
   test('isLang accepts supported tags and rejects everything else', () => {
@@ -276,4 +276,22 @@ describe('allKeys', () => {
       expect(en).toContain(k);
     }
   });
+});
+
+describe('webLang', () => {
+  test('takes a supported cookie and defaults to en otherwise', () => {
+    expect(webLang('uk')).toBe('uk');
+    expect(webLang(undefined)).toBe('en');
+    expect(webLang('xx')).toBe('en');
+    expect(webLang('../')).toBe('en');
+  });
+});
+
+test('the UI polish keys resolve in every language', () => {
+  const keys = [
+    'login.tagline', 'login.subline', 'login.showPassword', 'settings.delete', 'settings.confirmName',
+    'settings.servers.deleteTitle', 'settings.servers.deleteBody', 'settings.servers.deleteBuiltin', 'settings.servers.deleteHasEnvs',
+    'settings.env.dangerZone', 'settings.env.deleteTitle', 'settings.env.deleteBody', 'settings.env.deleteBusy',
+  ];
+  for (const lang of LANGS) for (const k of keys) expect(i18n(lang).t(k, { name: 'x', n: 1 }), `${lang} ${k}`).not.toBe(k);
 });

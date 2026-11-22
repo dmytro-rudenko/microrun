@@ -1,14 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { codePlain, i18n, isLang, negotiate, type I18n } from '@microrun/core/i18n';
+import { codePlain, i18n, isLang, webLang, type I18n } from '@microrun/core/i18n';
 import { AgentError, type ResultCode, type ResultMap, type StorageConfig } from '@microrun/core/protocol';
 import type { DiffEntry } from '@microrun/core/schema';
 import { windowLeftMs } from '@microrun/core/state';
 import { finished, streamOperation, type AppDeps, type Frame } from '../app.ts';
+import { setLangCookie } from '../auth.ts';
 import { decrypt, encrypt, hashToken, newToken } from '../crypto.ts';
 import { composeRefOf, type EnvRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
 import { boardView, short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
 import { envView, newEnvView } from '../ui/env.ts';
+import { alert } from '../ui/form.ts';
 import { envHistory, type HistoryVM } from '../ui/history.ts';
 import { codeText, html, type Html } from '../ui/html.ts';
 import { layout } from '../ui/layout.ts';
@@ -18,14 +20,12 @@ import { statusFor, wire } from './api.ts';
 
 type Body = Record<string, string | string[]>;
 
-const YEAR_S = 365 * 24 * 60 * 60;
-
 const bodyOf = (req: FastifyRequest): Body => (req.body ?? {}) as Body;
 const list = (b: Body, k: string) => {
   const v = b[k];
   return (Array.isArray(v) ? v : v === undefined ? [] : [v]).filter(Boolean);
 };
-const langOf = (req: FastifyRequest) => i18n(negotiate(req.cookies.mr_lang, req.headers['accept-language']));
+const langOf = (req: FastifyRequest) => i18n(webLang(req.cookies.mr_lang));
 const LINE_BREAKS = /\r\n|[\r\n]/g;
 const oneLine = (h: Html) => h.__html.replace(LINE_BREAKS, ' ');
 const OPS_PER_ENV = 200;
@@ -39,7 +39,7 @@ function sendHtml(reply: FastifyReply, h: Html | string, status = 200) {
 
 function rejection(reply: FastifyReply, i: I18n, code: ResultCode, params: Record<string, string | number> = {}) {
   reply.header('HX-Retarget', '#panel-alert').header('HX-Reswap', 'innerHTML');
-  return sendHtml(reply, html`<div class="alert" role="alert">${codeText(i, code, params)}</div>`, statusFor(code));
+  return sendHtml(reply, alert({ tone: 'error', role: 'alert', body: codeText(i, code, params) }), statusFor(code));
 }
 
 type Started = { operationId: string } | { rejected: { code: ResultCode; params: Record<string, string | number> } };
@@ -48,6 +48,8 @@ type EnvFormInput = {
   errors: Record<string, string>;
   isNew: boolean;
   deployToken?: string;
+  deleteError?: string;
+  storedName?: string;
   bind?: { ok: boolean; text: string };
   rollingHint?: boolean;
 };
@@ -102,6 +104,7 @@ function releaseVM(env: EnvRow, r: ReleaseRow, rs: ReleaseRow[], ops: OperationR
     activationSeq: r.activationSeq,
     imagePurged: r.imagePurgedAt !== null,
     stored: r.stored,
+    storing: ops.some((o) => o.toReleaseId === r.id && o.kind !== 'cleanup' && !finished(o)),
     cleanupFailed: cleanupFailedOf(ops, r),
   };
 }
@@ -452,7 +455,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
   app.post('/lang', async (req, reply) => {
     const lang = field(bodyOf(req), 'lang');
     if (isLang(lang)) {
-      reply.setCookie('mr_lang', lang, { path: '/', maxAge: YEAR_S, sameSite: 'lax', httpOnly: true, secure: config.secureCookies });
+      setLangCookie(reply, lang, config.secureCookies);
     }
     let back = '/';
     try {
@@ -502,6 +505,36 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     return sendHtml(reply, await blockFor(d, req, server.id));
   });
 
+  app.post<{ Params: { id: string } }>('/settings/servers/:id/delete', async (req, reply) => {
+    const server = await repo.getServer(req.params.id);
+    if (!server) return noBlock(reply);
+    const i = langOf(req);
+    const refuse = async (error: string, status: number) => sendHtml(reply, await blockFor(d, req, server.id, { error }), status);
+    if (field(bodyOf(req), 'confirm_name') !== server.name) return refuse(i.text('settings.confirmName', { name: server.name }), 400);
+    const res = await repo.deleteServer(server.id);
+    if (res === 'missing') return noBlock(reply);
+    if (res === 'builtin') return refuse(i.text('settings.servers.deleteBuiltin'), 409);
+    if (res === 'has-envs') {
+      const n = await repo.countEnvsOnServer(server.id);
+      return refuse(i.text('settings.servers.deleteHasEnvs', { name: server.name, n }), 409);
+    }
+    d.hub.disconnect(server.id);
+    return sendHtml(reply, await blockFor(d, req, await defaultServer(d)));
+  });
+
+  app.post<{ Params: { id: string } }>('/settings/env/:id/delete', async (req, reply) => {
+    const env = await repo.getEnv(req.params.id);
+    if (!env) return reply.code(404).send();
+    const i = langOf(req);
+    const again = (deleteError: string, status: number) =>
+      envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, false, status);
+    if (field(bodyOf(req), 'confirm_name') !== env.name) return again(i.text('settings.confirmName', { name: env.name }), 400);
+    const res = await repo.deleteEnv(env.id);
+    if (res === 'missing') return reply.code(404).send();
+    if (res === 'busy') return again(i.text('settings.env.deleteBusy', { name: env.name }), 409);
+    return reply.redirect('/', 303);
+  });
+
   app.post('/settings/env', async (req, reply) => {
     const b = bodyOf(req);
     const id = field(b, 'id');
@@ -510,7 +543,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const values = bodyValues(b);
     const rejected = (errors: Record<string, string>) =>
       existing
-        ? envPage(d, req, reply, existing, { values, errors, isNew: false }, false, 422)
+        ? envPage(d, req, reply, existing, { values, errors, isNew: false, storedName: existing.name }, false, 422)
         : newEnvPage(d, req, reply, { values, errors, isNew: true }, 422);
     const parsed = parseEnvForm(b);
     if (!parsed.ok) return rejected(parsed.errors);

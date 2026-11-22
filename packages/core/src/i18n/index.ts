@@ -2,7 +2,7 @@ import core from './catalogs/core.ts';
 import settings from './catalogs/settings.ts';
 import ui from './catalogs/ui.ts';
 
-export const LANGS = ['uk', 'en', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN'] as const;
+export const LANGS = ['en', 'uk', 'de', 'fr', 'es', 'pt-BR', 'pl', 'zh-CN'] as const;
 export type Lang = (typeof LANGS)[number];
 export type Msg = string | { one?: string; few?: string; many?: string; other: string };
 export type Catalog = Record<Lang, Record<string, Msg>>;
@@ -20,6 +20,10 @@ export const LANG_NAMES: Record<Lang, string> = {
 
 export function isLang(x: unknown): x is Lang {
   return typeof x === 'string' && (LANGS as readonly string[]).includes(x);
+}
+
+export function webLang(cookie: string | undefined): Lang {
+  return isLang(cookie) ? cookie : 'en';
 }
 
 function matchTag(tag: string): Lang | undefined {
