@@ -738,13 +738,25 @@ describe('cleanupView', () => {
 describe('panelView', () => {
   const i = i18n('en');
 
-  test('for production rollback-go asks for confirmation before submitting', () => {
-    const prod = env('prod');
+  test('the panel header links the environment name to its page by ID', () => {
+    const prod = env('prod', { id: 'env-42' });
     const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', html``).__html;
+    expect(out).toMatch(/<a href="\/env\/env-42"[^>]*>prod<\/a>/);
+  });
+
+  test('for production rollback-go asks for confirmation before submitting', () => {
+    const current = release({ id: 'r-current', state: 'active', sha: sha('7654321') });
+    const target = release({ id: 'r-target' });
+    const prod = env('prod', { releases: [current, target] });
+    const out = panelView(i, prod, current, 'csrf-token', html``).__html;
+    const yes = tagOf(out, 'confirm-yes');
+    const no = tagOf(out, 'confirm-no');
     expect(tagOf(out, 'confirm-ask')).toMatch(/\bhidden\b/);
-    expect(tagOf(out, 'confirm-yes')).toContain('type="submit"');
+    expect(yes).toContain('type="submit"');
     expect(tagOf(out, 'rollback-go')).toContain('type="button"');
-    expect(out).toContain(i.t('confirm.ask'));
+    expect.soft(out).toContain('<b>Roll back production prod to a1b2c3d?</b>');
+    expect.soft(out).toContain(`${yes}Yes, roll back</button>`);
+    expect.soft(out).toContain(`${no}Cancel</button>`);
   });
 
   test('for production the confirm step moves focus to Yes and back to the main button', () => {
@@ -810,6 +822,12 @@ describe('panelView', () => {
     expect(isDisabled(go!)).toBe(false);
   });
 
+  test('the rollback unavailability message names the server with the offline agent', () => {
+    const stage = env('stage', { agentOnline: false });
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
+    expect(out).toContain('Rollback is unavailable: the agent on server build-host is offline.');
+  });
+
   test('a marker warning disables rollback and shows the rb.noMarker text', () => {
     const noMarker = i.t('rb.noMarker');
     expect(noMarker).not.toBe('rb.noMarker');
@@ -846,6 +864,14 @@ describe('panelView', () => {
     expect(tagOf(out, 'approve-destructive')).toBeDefined();
     expect(out).toContain(i.t('codes.SCHEMA_DESTRUCTIVE', { col: 'users.email' }));
     expect(out).not.toContain('data-testid="rollback-go"');
+  });
+
+  test('for production approve-destructive confirms the commit and column', () => {
+    const failed = release({ state: 'failed', failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users.email' } } });
+    const prod = env('prod', { releases: [failed] });
+    const out = panelView(i, prod, failed, 'csrf-token', html``).__html;
+    expect.soft(out).toContain('<b>Allow a1b2c3d to remove users.email in production?</b>');
+    expect.soft(out).toContain(`${tagOf(out, 'confirm-yes')}Yes, approve</button>`);
   });
 
   test('an available release does not offer approve-destructive', () => {
