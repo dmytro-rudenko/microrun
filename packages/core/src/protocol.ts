@@ -21,7 +21,7 @@ export class AgentError extends Error {
   }
 }
 
-export interface ComposeRef { project: string; dir: string; files: string[] }
+export interface ComposeRef { project: string; dir: string; files: string[]; envFiles?: string[] }
 export interface DbRef { compose: ComposeRef; service: string; dbKind: DbKind; dbUrlEnv: string }
 export type ServiceSpec = { name: string; strategy: 'rolling'|'recreate'; image: string; domain?: string; port?: number };
 export type StorageConfig =
@@ -70,7 +70,7 @@ const params = z.record(z.string(), z.union([z.string(), z.number()]));
 const resultCode = z.enum(RESULT_CODES);
 const dbKind = z.enum(['postgres', 'mysql', 'sqlite', 'mongodb']);
 
-const composeRef = z.object({ project: z.string(), dir: z.string(), files: z.array(z.string()) });
+const composeRef = z.object({ project: z.string(), dir: z.string(), files: z.array(z.string()), envFiles: z.array(z.string()).optional() });
 const dbRef = z.object({ compose: composeRef, service: z.string(), dbKind, dbUrlEnv: z.string() });
 const serviceSpec = z.object({
   name: z.string(),

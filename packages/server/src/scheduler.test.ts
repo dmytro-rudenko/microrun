@@ -82,6 +82,7 @@ async function mkEnv(
     composeProject: `proj-${name}`,
     composeDir: `/srv/${name}`,
     composeFiles: ['docker-compose.yml'],
+    composeEnvFiles: [],
     services: (o.services ?? ['web']).map((s) => ({ name: s, strategy: 'rolling' as const })),
     migrationService: 'web',
     dbKind: 'postgres',

@@ -32,7 +32,7 @@ export type EnvFormParsed = Omit<EnvInput, 'storageConfigEnc' | 'deployTokenHash
 export type EnvFormValues = Partial<
   Record<
     | 'name' | 'branch' | 'is_production' | 'server_id' | 'position' | 'compose_project' | 'compose_dir'
-    | 'compose_files' | 'services' | 'migration_service' | 'db_kind' | 'db_url_env' | 'migration_tables'
+    | 'compose_files' | 'compose_env_files' | 'services' | 'migration_service' | 'db_kind' | 'db_url_env' | 'migration_tables'
     | 'expand_cmd' | 'contract_cmd' | 'cleanup_cmd' | 'schema_check' | 'health_timeout_s'
     | 'storage_kind' | 'storage_path' | 'storage_registry' | 'storage_repository' | 'storage_username'
     | 'storage_password' | 'storage_endpoint' | 'storage_region' | 'storage_bucket' | 'storage_prefix'
@@ -162,6 +162,7 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
     composeProject: req('compose_project'),
     composeDir: req('compose_dir'),
     composeFiles: lines(text(body, 'compose_files')),
+    composeEnvFiles: lines(text(body, 'compose_env_files')),
     services: services ?? [],
     migrationService,
     dbKind: choice(DB_KINDS, 'db_kind', text(body, 'db_kind'), 'postgres'),
@@ -284,6 +285,7 @@ ${field('position', entry('position', v('position'), 'number'))}
 ${field('compose_project', entry('compose_project', v('compose_project')))}
 ${field('compose_dir', entry('compose_dir', v('compose_dir')))}
 ${field('compose_files', html`<textarea name="compose_files" rows="3">${v('compose_files')}</textarea>`, 'compose_files')}
+${field('compose_env_files', html`<textarea name="compose_env_files" rows="2">${v('compose_env_files')}</textarea>`, 'compose_env_files')}
 ${field('services', html`<textarea name="services" rows="4">${v('services')}</textarea>`, 'services')}
 </fieldset>
 <fieldset><legend>${tr(i, 'settings.sec.database')}</legend>

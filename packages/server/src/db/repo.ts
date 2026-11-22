@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Knex } from 'knex';
 import type { CleanupState, ReleaseFacts, ReleasePatch, ReleaseState } from '@microrun/core/state';
+import type { ComposeRef } from '@microrun/core/protocol';
 
 export class BusyError extends Error {}
 
@@ -30,6 +31,7 @@ export interface EnvInput {
   composeProject: string;
   composeDir: string;
   composeFiles: string[];
+  composeEnvFiles: string[];
   services: ServiceSpec[];
   migrationService: string;
   dbKind: 'postgres' | 'mysql' | 'sqlite' | 'mongodb';
@@ -45,6 +47,10 @@ export interface EnvInput {
   retentionS: number;
   deployTokenHash: string;
 }
+
+type ComposeFields = Pick<EnvInput, 'composeProject' | 'composeDir' | 'composeFiles' | 'composeEnvFiles'>;
+export const composeRefOf = (e: ComposeFields): ComposeRef =>
+  ({ project: e.composeProject, dir: e.composeDir, files: e.composeFiles, envFiles: e.composeEnvFiles });
 
 export interface EnvRow extends EnvInput {
   id: string;
@@ -130,7 +136,7 @@ interface Shape {
 }
 
 const SERVER: Shape = { json: [], bool: ['builtin'] };
-const ENV: Shape = { json: ['composeFiles', 'services', 'migrationTables'], bool: ['isProduction'] };
+const ENV: Shape = { json: ['composeFiles', 'composeEnvFiles', 'services', 'migrationTables'], bool: ['isProduction'] };
 const RELEASE: Shape = {
   json: ['images', 'schemaSnapshot', 'schemaDiff', 'cleanupPreview'],
   bool: ['destructiveApproved', 'stored', 'hasCleanupCmd'],
