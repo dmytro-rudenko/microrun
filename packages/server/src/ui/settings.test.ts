@@ -385,9 +385,17 @@ describe('serversView', () => {
     token: 'tok_abc123',
     command: 'npm i -g microrun && MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
   };
+  const envs = [{ id: 'env-1', name: 'production' }, { id: 'env-2', name: 'staging' }];
+
+  test('lists environments with links to their settings and a link to create one', () => {
+    const out = serversView(en, servers, envs, 'csrf-1').__html;
+    expect(tagOf(out, 'env-link-production')).toContain('href="/settings/env/env-1"');
+    expect(tagOf(out, 'env-link-staging')).toContain('href="/settings/env/env-2"');
+    expect(tagOf(out, 'env-new')).toContain('href="/settings/env/new"');
+  });
 
   test('shows the new agent token and install command when a server was just created', () => {
-    const out = serversView(en, servers, 'csrf-1', created).__html;
+    const out = serversView(en, servers, [], 'csrf-1', created).__html;
     expect(textOf(out, 'agent-token')).toContain('tok_abc123');
     expect(textOf(out, 'agent-command')).toContain(
       'npm i -g microrun &amp;&amp; MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
@@ -395,35 +403,35 @@ describe('serversView', () => {
   });
 
   test('shows neither the token nor the command on a later render', () => {
-    const out = serversView(en, servers, 'csrf-1').__html;
+    const out = serversView(en, servers, [], 'csrf-1').__html;
     expect(tagOf(out, 'agent-token')).toBeUndefined();
     expect(tagOf(out, 'agent-command')).toBeUndefined();
     expect(out).not.toContain('tok_abc123');
   });
 
   test('has the create form with name field, submit and csrf', () => {
-    const out = serversView(en, servers, 'csrf-1').__html;
+    const out = serversView(en, servers, [], 'csrf-1').__html;
     expect(tagOf(out, 'server-name')).toBeDefined();
     expect(tagOf(out, 'server-create')).toBeDefined();
     expect(inputTag(out, '_csrf')).toContain('csrf-1');
   });
 
   test('renders one row per server with data-status online or offline', () => {
-    const out = serversView(en, servers, 'csrf-1').__html;
+    const out = serversView(en, servers, [], 'csrf-1').__html;
     expect(tagOf(out, 'server-row-local')).toMatch(/data-status="online"/);
     expect(tagOf(out, 'server-row-edge')).toMatch(/data-status="offline"/);
     expect(out.match(/data-testid="server-row-/g)).toHaveLength(2);
   });
 
   test('shows the agent version and proxy mode without printing null', () => {
-    const out = serversView(en, servers, 'csrf-1').__html;
+    const out = serversView(en, servers, [], 'csrf-1').__html;
     expect(out).toContain('1.2.0');
     expect(out).toContain('bundled');
     expect(out).not.toContain('null');
   });
 
   test('every server row, the builtin one included, has a proxy_mode form posting to its own proxy route', () => {
-    const out = serversView(en, servers, 'csrf-1').__html;
+    const out = serversView(en, servers, [], 'csrf-1').__html;
     for (const s of servers) {
       const row = out.slice(out.indexOf(`data-testid="server-row-${s.name}"`));
       const formAt = row.indexOf(`<form method="post" action="/settings/servers/${s.id}/proxy"`);
@@ -438,15 +446,15 @@ describe('serversView', () => {
   });
 
   test('escapes server names', () => {
-    const out = serversView(en, [{ ...servers[0]!, name: EVIL }], 'csrf-1').__html;
+    const out = serversView(en, [{ ...servers[0]!, name: EVIL }], [], 'csrf-1').__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
 
   test.each(LANGS)('renders in %s without raw catalog keys', (lang) => {
-    const out = serversView(i18n(lang), servers, 'csrf-1', created).__html;
+    const out = serversView(i18n(lang), servers, envs, 'csrf-1', created).__html;
     expectNoRawKeys(lang, 'serversView', out);
-    if (lang !== 'en') expect(out).not.toBe(serversView(en, servers, 'csrf-1', created).__html);
+    if (lang !== 'en') expect(out).not.toBe(serversView(en, servers, [], 'csrf-1', created).__html);
   });
 });
 

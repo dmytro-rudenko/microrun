@@ -201,7 +201,7 @@ async function serversPage(
   status = 200,
 ) {
   const i = langOf(req);
-  return page(req, reply, i.t('settings.servers.title'), 'settings', serversView(i, await serverRows(d), req.csrfToken, created, error), status);
+  return page(req, reply, i.t('settings.servers.title'), 'settings', serversView(i, await serverRows(d), (await d.repo.listEnvs()).map((e) => ({ id: e.id, name: e.name })), req.csrfToken, created, error), status);
 }
 
 function storageValues(s: StorageConfig | null): EnvFormValues {
@@ -373,7 +373,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const i = langOf(req);
     const env = await repo.getEnv(field(b, 'envId'));
     if (!env) return rejection(reply, i, 'INVALID_REQUEST');
-    if (env.isProduction && field(b, 'confirm') !== env.name) return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
+    if (env.isProduction && field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', { env: env.name });
     return started(d, req, reply, await orchestrator.requestRollback(env.id, field(b, 'releaseId')));
   });
 
@@ -415,7 +415,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const b = bodyOf(req);
     const i = langOf(req);
     const env = await repo.getEnv(field(b, 'envId'));
-    if (!env || field(b, 'confirm') !== env.name) return rejection(reply, i, 'INVALID_REQUEST', env ? { env: env.name } : {});
+    if (!env || field(b, 'confirm') !== 'yes') return rejection(reply, i, 'INVALID_REQUEST', env ? { env: env.name } : {});
     const sha = field(b, 'commitSha');
     try {
       await orchestrator.approveDestructive(env.id, sha);

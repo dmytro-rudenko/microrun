@@ -126,9 +126,9 @@ test('deploy v1 then v2, write data, roll back within 60 s keeping old fields', 
 
   await page.goto('/');
   await page.click('[data-testid=rel-production-aaaaaaa]');
-  await page.fill('[data-testid=confirm-name]', 'production');
-  const started = Date.now();
   await page.click('[data-testid=rollback-go]');
+  const started = Date.now();
+  await page.click('[data-testid=confirm-yes]');
   await expect(page.locator('[data-testid=rollback-done]')).toBeVisible({ timeout: 60_000 });
   expect(Date.now() - started).toBeLessThan(60_000);
   rolledBackAt = Date.now();
@@ -167,15 +167,16 @@ test('a new commit deploys normally', async () => {
   expect((await getJson<{ version: string }>('/version')).version).toBe('v3');
 });
 
-test('production rollback requires typing the name', async () => {
+test('production rollback asks for confirmation and No cancels', async () => {
   await page.goto('/');
   await page.click('[data-testid=rel-production-aaaaaaa]');
-  const go = page.locator('[data-testid=rollback-go]');
-  await expect(go).toBeDisabled();
-  await page.fill('[data-testid=confirm-name]', 'productio');
-  await expect(go).toBeDisabled();
-  await page.fill('[data-testid=confirm-name]', 'production');
-  await expect(go).toBeEnabled();
+  const ask = page.locator('[data-testid=confirm-ask]');
+  await expect(ask).toBeHidden();
+  await page.click('[data-testid=rollback-go]');
+  await expect(ask).toBeVisible();
+  await page.click('[data-testid=confirm-no]');
+  await expect(ask).toBeHidden();
+  await expect(page.locator('[data-testid=rollback-go]')).toBeVisible();
 });
 
 test('destructive migration is rejected before touching the database', async () => {

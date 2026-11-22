@@ -185,6 +185,7 @@ const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 export function serversView(
   i: I18n,
   servers: { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string }[],
+  envs: { id: string; name: string }[],
   csrf: string,
   created?: { name: string; token: string; command: string },
   error?: string,
@@ -208,7 +209,10 @@ ${error ? html`<div class="alert" role="alert" data-testid="server-error">${erro
 <label>${tr(i, 'settings.servers.proxy')}<select name="proxy_mode">${PROXY_MODES.map((m) => html`<option value="${m}">${m}</option>`)}</select></label>
 <button type="submit" data-testid="server-create">${tr(i, 'settings.servers.create')}</button></form>
 <table><thead><tr><th>${tr(i, 'settings.servers.colName')}</th><th>${tr(i, 'settings.servers.colStatus')}</th><th>${tr(i, 'settings.servers.colVersion')}</th><th>${tr(i, 'settings.servers.proxy')}</th><th></th></tr></thead>
-<tbody>${servers.map(row)}</tbody></table>`;
+<tbody>${servers.map(row)}</tbody></table>
+<h2>${tr(i, 'nav.envs')}</h2>
+<ul>${envs.map((e) => html`<li><a href="/settings/env/${e.id}" data-testid="env-link-${e.name}">${e.name}</a></li>`)}</ul>
+<a href="/settings/env/new" data-testid="env-new">${tr(i, 'settings.env.newTitle')}</a>`;
 }
 
 interface Option {

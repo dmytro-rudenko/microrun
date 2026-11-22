@@ -160,6 +160,12 @@ describe('boardView', () => {
     expect(stageColumn).toContain('<a href="/env/env-stage"');
   });
 
+  test('each column links to its environment settings', () => {
+    const out = boardView(i, [env('prod'), env('stage')], NOW).__html;
+    expect(tagOf(out, 'env-settings-stage')).toContain('href="/settings/env/env-stage"');
+    expect(out).toContain(`data-testid="env-settings-prod">${i.t('nav.settings')}</a>`);
+  });
+
   test('a release card has testid rel-<env>-<sha7>, data-state and panel wiring', () => {
     const e = env('stage', {
       releases: [
@@ -619,13 +625,25 @@ describe('cleanupView', () => {
 describe('panelView', () => {
   const i = i18n('en');
 
-  test('for production rollback-go is disabled and confirm-name is present', () => {
+  test('for production rollback-go asks for confirmation before submitting', () => {
     const prod = env('prod');
     const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', NOW).__html;
-    expect(tagOf(out, 'confirm-name')).toBeDefined();
-    const go = tagOf(out, 'rollback-go');
-    expect(go).toBeDefined();
-    expect(isDisabled(go!)).toBe(true);
+    expect(tagOf(out, 'confirm-ask')).toMatch(/\bhidden\b/);
+    expect(tagOf(out, 'confirm-yes')).toContain('type="submit"');
+    expect(tagOf(out, 'rollback-go')).toContain('type="button"');
+    expect(out).toContain(i.t('confirm.ask'));
+  });
+
+  test('an available release offers switching, the active one offers rollback to the previous build', () => {
+    const older = release({ id: 'r-old', state: 'available', activationSeq: 1 });
+    const active = release({ id: 'r-act', state: 'active', activationSeq: 2 });
+    const stage = env('stage', { releases: [active, older] });
+    const onOld = panelView(i, stage, older, 'csrf-token', NOW).__html;
+    expect(onOld).toContain(i.t('rb.switch'));
+    const onActive = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    expect(onActive).toContain(i.t('rb.go'));
+    expect(onActive).toContain('value="r-old"');
+    expect(onActive).not.toContain(i.t('rb.switch'));
   });
 
   test('has an empty alert slot that rejections are retargeted into', () => {

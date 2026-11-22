@@ -457,24 +457,24 @@ describe('UI routes', () => {
   }
 
   describe('POST /rollback', () => {
-    it('answers 422 when the production confirm names another env and starts nothing', async () => {
+    it('answers 422 when the production confirm is not yes and starts nothing', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'staging' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(res.body).toContain('role="alert"');
       expect((await ops()).map((o) => o.kind)).toEqual(['deploy', 'deploy']);
     });
 
     it('answers 422 for an unknown env', async () => {
-      const res = await post('/rollback', { envId: 'nope', releaseId: 'nope', confirm: 'production' });
+      const res = await post('/rollback', { envId: 'nope', releaseId: 'nope', confirm: 'yes' });
       expect(res.statusCode).toBe(422);
     });
 
     it('starts a confirmed production rollback and answers the progress panel with its steps', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(200);
       expect(res.body).toContain('data-testid="panel"');
       expect(res.body).toContain(en.t('step.image', { sha: A7 }));
@@ -490,7 +490,7 @@ describe('UI routes', () => {
     it('streams a done frame with the rollback-done header once the UI rollback finished', async () => {
       await deploy(A);
       await deploy(B);
-      await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       const rb = (await ops()).find((o) => o.kind === 'rollback')!;
       await settle(rb.id);
       const res = await get(`/ops/${rb.id}/events`);
@@ -527,7 +527,7 @@ describe('UI routes', () => {
       await deploy(A);
       await deploy(B);
       const free = await busy();
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(409);
       expect(res.body).toMatch(/<div class="alert"[^>]*role="alert"/);
       expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
@@ -539,7 +539,7 @@ describe('UI routes', () => {
     it('retargets a wrong-confirm 422 into the panel alert slot as well', async () => {
       await deploy(A);
       await deploy(B);
-      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'staging' });
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(res.headers['hx-retarget']).toBe('#panel-alert');
     });
@@ -617,16 +617,16 @@ describe('UI routes', () => {
   });
 
   describe('POST /approve', () => {
-    it('answers 422 and stores no approval when the confirm is not the env name', async () => {
+    it('answers 422 and stores no approval when the confirm is not yes', async () => {
       await destructiveRejection();
-      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'prod' });
+      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'no' });
       expect(res.statusCode).toBe(422);
       expect(await repo.getApproval(prodId, B)).toBeNull();
     });
 
     it('stores the approval of a SCHEMA_DESTRUCTIVE commit and answers its panel', async () => {
       await destructiveRejection();
-      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'production' });
+      const res = await post('/approve', { envId: prodId, commitSha: B, confirm: 'yes' });
       expect(res.statusCode, res.body).toBe(200);
       expect(res.body).toContain(`data-release="${(await release(B)).id}"`);
       expect(await repo.getApproval(prodId, B)).toMatchObject({ envId: prodId, commitSha: B });
@@ -634,9 +634,9 @@ describe('UI routes', () => {
 
     it('answers 422 for an unknown env, an unknown sha and a commit that was never rejected', async () => {
       await destructiveRejection();
-      expect((await post('/approve', { envId: 'nope', commitSha: B, confirm: 'production' })).statusCode).toBe(422);
-      expect((await post('/approve', { envId: prodId, commitSha: 'ffffffff', confirm: 'production' })).statusCode).toBe(422);
-      expect((await post('/approve', { envId: prodId, commitSha: A, confirm: 'production' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: 'nope', commitSha: B, confirm: 'yes' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: prodId, commitSha: 'ffffffff', confirm: 'yes' })).statusCode).toBe(422);
+      expect((await post('/approve', { envId: prodId, commitSha: A, confirm: 'yes' })).statusCode).toBe(422);
       expect(await repo.getApproval(prodId, A)).toBeNull();
     });
   });
@@ -1022,7 +1022,7 @@ describe('UI routes', () => {
 
     it('lists the approval of a destructive change as an approve operation', async () => {
       await destructiveRejection();
-      expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'production' })).statusCode).toBe(200);
+      expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'yes' })).statusCode).toBe(200);
       const body = (await get('/history')).body;
       expect(en.t('kind.approve')).not.toBe('kind.approve');
       expect(tbody(body)).toContain(en.t('kind.approve'));

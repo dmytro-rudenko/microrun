@@ -2,26 +2,38 @@ import type { I18n } from '@microrun/core/i18n';
 import { codeText, html, raw, tr, type Html } from './html.ts';
 import { blockedNote, diffView, prodTag, short, stateLabel, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
 
-const NAME_GATE = "this.form.querySelector('button[type=submit]').disabled=this.value!==this.dataset.name";
+const ASK = "this.hidden=true;this.nextElementSibling.hidden=false";
+const BACK = "var a=this.parentNode;a.hidden=true;a.previousElementSibling.hidden=false";
 
 const post = (url: string, csrf: string) =>
   html`hx-post="${url}" hx-headers="${JSON.stringify({ 'x-csrf-token': csrf })}" hx-target="#panel"`;
 
 const hidden = (name: string, value: string) => html`<input type="hidden" name="${name}" value="${value}">`;
 
-const nameInput = (i: I18n, env: EnvVM, testid: string, enabled: boolean) =>
-  html`<label class="small block">${tr(i, 'rb.confirm', { name: env.name })}<input type="text" name="confirm" data-testid="${testid}" data-name="${env.name}" autocomplete="off" oninput="${NAME_GATE}"${enabled ? '' : ' disabled'}></label>`;
+const confirmedAction = (i: I18n, env: EnvVM, testid: string, label: Html, cls: string, disabled: boolean): Html =>
+  env.isProduction
+    ? html`<button type="button" class="${cls}" data-testid="${testid}" onclick="${ASK}"${disabled ? ' disabled' : ''}>${label}</button>
+<div class="ask" data-testid="confirm-ask" hidden>${hidden('confirm', 'yes')}<b>${tr(i, 'confirm.ask')}</b>
+<button type="submit" class="${cls}" data-testid="confirm-yes">${tr(i, 'confirm.yes')}</button>
+<button type="button" class="big ghost" data-testid="confirm-no" onclick="${BACK}">${tr(i, 'confirm.no')}</button></div>`
+    : html`<button type="submit" class="${cls}" data-testid="${testid}"${disabled ? ' disabled' : ''}>${label}</button>`;
 
-function rollbackSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
+function rollbackTarget(env: EnvVM, r: ReleaseVM): ReleaseVM | null {
+  if (r.state === 'available') return r;
+  if (r.state !== 'active') return null;
+  return env.releases.filter((x) => x.state === 'available').reduce<ReleaseVM | null>((best, x) => ((x.activationSeq ?? 0) > (best?.activationSeq ?? -1) ? x : best), null);
+}
+
+function rollbackSection(i: I18n, env: EnvVM, r: ReleaseVM, target: ReleaseVM, csrf: string): Html {
+  const switching = r.state === 'available';
   const current = env.releases.find((x) => x.state === 'active');
-  const blocked = env.releases.filter((x) => x.state === 'active' || (x.state === 'available' && (x.activationSeq ?? 0) > (r.activationSeq ?? 0)));
+  const blocked = env.releases.filter((x) => x.state === 'active' || (x.state === 'available' && (x.activationSeq ?? 0) > (target.activationSeq ?? 0)));
   const reason = !env.agentOnline ? 'rb.noAgent' : env.markerWarnings.length > 0 ? 'rb.noMarker' : null;
-  return html`<form class="sect" ${post('/rollback', csrf)}>${hidden('envId', env.id)}${hidden('releaseId', r.id)}
-<b>${tr(i, 'rb.title', { from: current ? short(current.sha) : '—', to: short(r.sha) })}</b>
+  return html`<form class="sect" ${post('/rollback', csrf)}>${hidden('envId', env.id)}${hidden('releaseId', target.id)}
+<b>${tr(i, switching ? 'rb.switchTitle' : 'rb.title', { from: current ? short(current.sha) : '—', to: short(target.sha) })}</b>
 <div class="small willblock">${tr(i, 'rb.willBlock')} ${blocked.flatMap((b, k) => [k ? ', ' : '', html`<span class="sha">${short(b.sha)}</span>`])}</div>
 <div class="small">${tr(i, 'rb.schema')}</div>
-${env.isProduction && nameInput(i, env, 'confirm-name', reason === null)}
-<button type="submit" class="big${env.isProduction ? ' prod' : ''}" data-testid="rollback-go"${reason !== null || env.isProduction ? ' disabled' : ''}>${tr(i, 'rb.go')}</button>
+${confirmedAction(i, env, 'rollback-go', tr(i, switching ? 'rb.switch' : 'rb.go'), `big${env.isProduction ? ' prod' : ''}`, reason !== null)}
 ${reason && html`<div class="small why">${tr(i, reason)}</div>`}</form>`;
 }
 
@@ -31,8 +43,7 @@ function approveSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
 <b>${tr(i, 'approve.title')}</b>
 <div class="small">${tr(i, 'approve.text', { sha: short(r.sha), col: r.failNote?.params.col ?? '' })}</div>
 ${expiring.length > 0 && html`<div class="small">${tr(i, 'closeWindow.text', { list: expiring.join(', ') })}</div>`}
-${nameInput(i, env, 'approve-name', true)}
-<button type="submit" class="big prod" data-testid="approve-destructive" disabled>${tr(i, 'approve.go')}</button></form>`;
+${confirmedAction(i, env, 'approve-destructive', tr(i, 'approve.go'), 'big prod', false)}</form>`;
 }
 
 function closeWindowSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
@@ -101,6 +112,11 @@ ${rules.map(
 <button type="button" class="big ghost" data-testid="cleanup-skip" hx-post="/cleanup/dismiss">${tr(i, 'cl.skip')}</button></form>`;
 }
 
+function rollbackBlock(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html | null {
+  const target = rollbackTarget(env, r);
+  return target && rollbackSection(i, env, r, target, csrf);
+}
+
 export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now: number): Html {
   return html`<div class="in${env.isProduction ? ' prod' : ''}" data-testid="panel" data-release="${r.id}">
 <button class="x" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
@@ -109,7 +125,7 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
 <h2><span class="sha">${short(r.sha)}</span> <span class="badge b-${r.state}">${stateLabel(i, r.state)}</span></h2><div>${r.message}</div>
 <div class="small meta">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="small label">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
-${r.state === 'available' && html`${rollbackSection(i, env, r, csrf)}${closeWindowSection(i, env, r, csrf)}`}
+${rollbackBlock(i, env, r, csrf)}${r.state === 'available' && closeWindowSection(i, env, r, csrf)}
 ${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}</div>`;
 }
 
