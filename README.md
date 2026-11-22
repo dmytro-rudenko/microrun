@@ -1,11 +1,11 @@
 # microrun
 
-Self-hosted інструмент безпечного відкату релізів для Docker Compose без Kubernetes.
-Один екземпляр обслуговує всі оточення проєкту (dev, stage, production): фіксує кожен реліз,
-перевіряє схему бази до деплою, відкочує однією дією в UI без DDL і блокує повторний деплой
-коміту, з якого виконано відкат.
+Self-hosted, safe release rollback for Docker Compose projects without Kubernetes.
+One instance serves every environment of a project (dev, stage, production): it records each
+release, checks the database schema before a deploy, rolls back in one click from the web UI
+without running DDL, and refuses to redeploy a commit that was rolled back.
 
-## Встановлення
+## Installation
 
 ```yaml
 # docker-compose.yml
@@ -24,21 +24,22 @@ volumes:
 
 `.env`:
 
-| ENV | Обов'язкова | Значення |
+| Variable | Required | Value |
 |---|---|---|
-| `MICRORUN_ADMIN_USER` | так | логін адміністратора |
-| `MICRORUN_ADMIN_PASSWORD` | так | пароль, ≥ 12 символів, інакше сервер не стартує |
-| `MICRORUN_SECRET_KEY` | так | 32 байти base64 (`openssl rand -base64 32`) для шифрування секретів сховищ |
-| `MICRORUN_PUBLIC_URL` | так | зовнішній URL; `https://` вмикає `Secure` cookie |
-| `MICRORUN_TRUST_PROXY` | ні | вимкнено; адреси або підмережі reverse-проксі через кому (`127.0.0.1`, `10.0.0.0/8`), чиїм `X-Forwarded-For`/`X-Forwarded-Proto` сервер довіряє |
-| `MICRORUN_DATA_DIR` | ні | `/data`; SQLite `microrun.db` у WAL-режимі |
-| `PORT` | ні | `8080` |
+| `MICRORUN_ADMIN_USER` | yes | admin login |
+| `MICRORUN_ADMIN_PASSWORD` | yes | admin password, at least 12 characters, or the server refuses to start |
+| `MICRORUN_SECRET_KEY` | yes | 32 bytes in base64 (`openssl rand -base64 32`), encrypts storage secrets |
+| `MICRORUN_PUBLIC_URL` | yes | external URL; `https://` turns on the `Secure` cookie flag |
+| `MICRORUN_TRUST_PROXY` | no | off; comma-separated addresses or subnets of reverse proxies (`127.0.0.1`, `10.0.0.0/8`) whose `X-Forwarded-For`/`X-Forwarded-Proto` the server trusts |
+| `MICRORUN_DATA_DIR` | no | `/data`; SQLite `microrun.db` in WAL mode |
+| `PORT` | no | `8080` |
 
-### HTTPS через reverse-проксі
+### HTTPS behind a reverse proxy
 
-Сервер слухає звичайний HTTP; TLS завершує проксі перед ним. Задайте `MICRORUN_TRUST_PROXY`
-адресою проксі, щоб сервер бачив справжню IP клієнта й протокол. Проксі має пропускати
-WebSocket-апгрейд для `/api/v1/agent` і не буферизувати SSE-потоки `/ops` та `/api/v1/operations`.
+The server speaks plain HTTP; a proxy in front of it terminates TLS. Set `MICRORUN_TRUST_PROXY`
+to the proxy address so the server sees the real client IP and protocol (the login rate limit
+depends on it). The proxy must pass the WebSocket upgrade for `/api/v1/agent` and must not
+buffer the SSE streams under `/ops` and `/api/v1/operations`.
 
 Caddy:
 
@@ -54,7 +55,7 @@ microrun.example.com {
 }
 ```
 
-Caddy сам передає WebSocket-апгрейд і заголовки `X-Forwarded-*`.
+Caddy passes the WebSocket upgrade and the `X-Forwarded-*` headers on its own.
 
 nginx:
 
@@ -89,103 +90,109 @@ server {
 }
 ```
 
-### Вбудований агент
+### Built-in agent
 
-Якщо змонтовано `/var/run/docker.sock`, сервер реєструє сервер `local` і керує контейнерами
-цього хоста сам. Йому потрібні:
+When `/var/run/docker.sock` is mounted, the server registers a server named `local` and manages
+the containers of its own host. It needs:
 
-- каталоги compose-проєктів (`compose_dir` оточення), змонтовані в контейнер **за тим самим
-  шляхом**: `-v /srv/shop:/srv/shop`;
-- для приватних registry — `-v ~/.docker/config.json:/root/.docker/config.json:ro`;
-- для локального сховища релізів — каталог `storage_path`, змонтований так само.
+- the compose project directories (an environment's `compose_dir`) mounted into the container
+  **at the same path**: `-v /srv/shop:/srv/shop`;
+- for private registries, `-v ~/.docker/config.json:/root/.docker/config.json:ro`;
+- for local release storage, the `storage_path` directory mounted the same way.
 
-### Агент на інших серверах
+### Agents on other servers
 
-На кожному іншому хості з Docker і Compose ≥ 2.30:
+On every other host with Docker and Compose 2.30 or newer:
 
 ```sh
 npm i -g microrun
-microrun agent --url https://microrun.example.com --token <токен із «Сервери»>
+MICRORUN_AGENT_TOKEN=<token from Settings → Servers> microrun agent --url https://microrun.example.com
 ```
 
-Агент сам підключається до сервера вихідним WebSocket; вхідні порти й SSH-ключі не потрібні.
-Для systemd:
+The agent dials out to the server over a WebSocket; it needs no inbound ports and no SSH keys.
+Pass the token through the environment rather than `--token`, so it does not show up in the
+process list. With systemd:
 
 ```sh
 sudo install -d -m 700 /etc/microrun
 sudo install -m 600 /dev/null /etc/microrun/agent.env
-echo 'MICRORUN_AGENT_TOKEN=<токен>' | sudo tee /etc/microrun/agent.env >/dev/null
+echo 'MICRORUN_AGENT_TOKEN=<token>' | sudo tee /etc/microrun/agent.env >/dev/null
 microrun agent install-service --url https://microrun.example.com | sudo tee /etc/systemd/system/microrun-agent.service
 sudo systemctl enable --now microrun-agent
 ```
 
-Юніт від `install-service` читає токен через `EnvironmentFile=/etc/microrun/agent.env` і ніколи
-не містить його сам, навіть якщо передано `--token`: файли юнітів доступні на читання всім
-користувачам, тому токен лежить лише у файлі з правами 0600.
+The unit printed by `install-service` reads the token through
+`EnvironmentFile=/etc/microrun/agent.env` and never contains it, even when `--token` is given:
+unit files are world-readable, so the token lives only in a file with mode 0600.
 
-### Сховища релізів
+### Release storage
 
-Для кожного сервера заведіть окремі облікові дані сховища, обмежені власним префіксом
-(S3-префікс або репозиторій registry), а не один спільний ключ на всі сервери. Тоді
-скомпрометований хост не зможе прочитати чи підмінити релізи інших серверів. Під час
-завантаження агент звіряє образи з digest, записаним при деплої, і відхиляє підмінений архів
-або перезаписаний тег (`STORAGE_FAILED`, `reason: digest`). Назва оточення в шляхах і тегах
-нормалізується до малих літер, цифр і дефісів: `My Env` → `my-env`.
+Give each server its own storage credentials, scoped to its own prefix (an S3 prefix or a
+registry repository), instead of one key shared by every server. A compromised host then cannot
+read or replace another server's releases. When restoring, the agent checks the images against
+the digests recorded at deploy time and rejects a replaced archive or a re-pushed tag
+(`STORAGE_FAILED`, `reason: digest`). Environment names in storage paths and tags are normalised
+to lowercase letters, digits and hyphens: `My Env` → `my-env`.
 
-## Деплой із CI
+## Deploying from CI
 
 ```sh
+export MICRORUN_URL=https://microrun.example.com
+export MICRORUN_DEPLOY_TOKEN=<the environment's deploy token, from your CI secrets>
 npx microrun deploy \
-  --url "$MICRORUN_URL" --token "$MICRORUN_DEPLOY_TOKEN" \
   --image web=registry.example.com/shop/web:$GIT_SHA \
   --image worker=registry.example.com/shop/worker:$GIT_SHA \
   --commit "$GIT_SHA" --branch prod
 ```
 
-`--image <ref>` без імені сервісу застосовує один образ до всіх сервісів оточення.
-Коди виходу: `0` — успіх або коміт уже активний; `2` — відмова (`COMMIT_BLOCKED`,
-`COMMIT_EXPIRED`, `SCHEMA_DESTRUCTIVE`, `BRANCH_MISMATCH`, `DB_MARKER_MISMATCH`, …) з причиною в
-повідомленні; `1` — збій під час деплою; `3` — помилка запуску, мережі чи оточення зайняте довше
-за `--busy-timeout`.
+`--image <ref>` without a service name applies one image to every service of the environment.
+Exit codes: `0` — success, or the commit is already active; `2` — rejected (`COMMIT_BLOCKED`,
+`COMMIT_EXPIRED`, `SCHEMA_DESTRUCTIVE`, `BRANCH_MISMATCH`, `DB_MARKER_MISMATCH`, …) with the
+reason in the message; `1` — the deploy failed; `3` — a usage or network error, or the
+environment stayed busy longer than `--busy-timeout`.
 
-## Міграції: expand / contract / cleanup
+## Migrations: expand / contract / cleanup
 
-microrun не пише міграцій — він запускає ваші команди з образу релізу в одноразовому контейнері
-сервісу `migration_service` з його env і змінними `MICRORUN_ENV`, `MICRORUN_RELEASE_COMMIT`,
-`MICRORUN_DEPLOYED_AT`, `MICRORUN_ROLLED_BACK_AT` (ISO 8601 UTC).
+microrun does not write migrations. It runs your commands from the release image in a one-off
+container of the `migration_service` service, with that service's env plus `MICRORUN_ENV`,
+`MICRORUN_RELEASE_COMMIT`, `MICRORUN_DEPLOYED_AT` and `MICRORUN_ROLLED_BACK_AT` (ISO 8601 UTC).
 
-- **`expand_cmd`** — лише додає: нові таблиці, nullable-колонки, колонки з default, індекси.
-  Схема після expand мусить працювати і зі старим, і з новим кодом. Перед production-деплоєм
-  microrun проганяє expand на тимчасовій копії схеми й відхиляє деструктивні зміни
-  (`SCHEMA_DESTRUCTIVE`) до того, як торкнутися бази.
-- **`contract_cmd`** — прибирає старе. microrun запускає його лише тоді, коли всі старші релізи
-  вийшли з вікна відкату.
-- **`cleanup_cmd`** — необов'язкові правила прибирання даних релізу після відкату. Протокол
-  stdout — JSON-рядки, решта рядків іде в лог:
-  - `--dry-run` → `{"rule":"<id>","description":"<текст>","count":<n>}`
+- **`expand_cmd`** only adds: new tables, nullable columns, columns with a default, indexes.
+  The schema after expand must work with both the old and the new code. Before a production
+  deploy, microrun runs expand against a temporary copy of the schema and rejects destructive
+  changes (`SCHEMA_DESTRUCTIVE`) before the real database is touched.
+- **`contract_cmd`** removes what is no longer used. microrun runs it only once every older
+  release has left the rollback window.
+- **`cleanup_cmd`** holds optional rules that remove data a release created, after it was rolled
+  back. Its stdout protocol is JSON lines; any other line goes to the log:
+  - `--dry-run` → `{"rule":"<id>","description":"<text>","count":<n>}`
   - `--apply --rules=<id>,<id>` → `{"rule":"<id>","deleted":<n>}`
 
-Адміністратор бачить кількість записів для кожного правила й підтверджує прибирання в UI.
+The admin sees the record count for each rule and confirms the cleanup in the UI.
 
-## Що варто знати
+## Good to know
 
-- microrun пише `docker-compose.microrun.yml` поруч із вашими compose-файлами. Ручний
-  `docker compose up` без нього поверне образ із compose-файлу, а не активний реліз.
-- Доступ до `docker.sock` рівнозначний root на хості — і для вбудованого, і для зовнішнього агента.
-- Rolling-заміна вимагає healthcheck і відсутності `container_name` та опублікованих портів у
-  сервісу (трафік іде через ваш проксі або вбудований Caddy).
-- Вбудований проксі `microrun-proxy` підключається до окремої мережі на кожен compose-проєкт
-  (`microrun-proxy-<project>`), тож сервіси різних проєктів не бачать один одного через нього.
-- SQLite як база застосунку з rolling: два контейнери пишуть в один файл під час заміни —
-  увімкніть WAL у застосунку.
-- Старі колонки живуть до кінця вікна відкату — це ціна відкату без DDL.
+- microrun writes `docker-compose.microrun.yml` next to your compose files. A manual
+  `docker compose up` without it brings back the image from your compose file, not the active
+  release.
+- Access to `docker.sock` is equivalent to root on the host, for the built-in and the remote
+  agent alike.
+- A rolling replacement needs a healthcheck and no `container_name` or published ports on the
+  service (traffic goes through your proxy or the bundled Caddy).
+- The bundled proxy `microrun-proxy` joins one network per compose project
+  (`microrun-proxy-<project>`), so services of different projects cannot reach each other
+  through it.
+- SQLite as the application database with rolling replacement: two containers write one file
+  during the switch, so turn on WAL in the application.
+- Old columns live until the end of the rollback window; that is the price of rollback without
+  DDL.
 
-## Розробка
+## Development
 
 ```sh
 pnpm install
 pnpm -r build
-pnpm test          # unit та інтеграційні
-pnpm test:docker   # агент на справжньому Docker
-pnpm test:e2e      # Playwright, повний сценарій
+pnpm test          # unit and integration tests
+pnpm test:docker   # agent tests against a real Docker engine
+pnpm test:e2e      # Playwright, the full scenario
 ```
