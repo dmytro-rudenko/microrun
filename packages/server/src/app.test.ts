@@ -1081,4 +1081,84 @@ describe('UI routes', () => {
       expect(bad.cookies.find((c) => c.name === 'mr_lang')).toBeUndefined();
     });
   });
+
+  describe('environment page', () => {
+    const section = (body: string, id: string) => new RegExp(`<section id="${id}"[\\s\\S]*?</section>`).exec(body)?.[0] ?? '';
+    const bodyRows = (h: string) => (/<tbody>([\s\S]*)<\/tbody>/.exec(h)?.[1] ?? '').match(/<tr>/g)?.length ?? 0;
+
+    it('drops the history and settings pages', async () => {
+      for (const url of ['/history', '/settings/servers', `/settings/env/${prodId}`, '/settings/env/new']) {
+        expect((await get(url)).statusCode, url).toBe(404);
+      }
+    });
+
+    it('opens the new environment form on /env/new', async () => {
+      const res = await get('/env/new');
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toContain('action="/settings/env#settings"');
+      expect(res.body).toContain('data-testid="server-block"');
+    });
+
+    it('has a header with a new-environment link and no history or settings nav', async () => {
+      const body = (await get('/')).body;
+      expect(body).toContain('data-testid="env-new"');
+      expect(body).toContain('href="/env/new"');
+      expect(body).not.toContain('href="/history"');
+      expect(body).not.toContain('href="/settings/servers"');
+      expect(body).toContain(`href="/env/${prodId}#settings" data-testid="env-settings-production"`);
+    });
+
+    it('shows releases, history and settings on one env page with a production strip', async () => {
+      const body = (await get(`/env/${prodId}`)).body;
+      for (const id of ['releases', 'history', 'settings']) expect(body).toContain(`<section id="${id}"`);
+      expect(section(body, 'settings')).toContain('action="/settings/env#settings"');
+      expect(body).toContain('class="jump prod"');
+    });
+
+    it('shows the last 5 operations and all of them on ?history=all', async () => {
+      for (const sha of ['c1c1c1c1', 'c2c2c2c2', 'c3c3c3c3', 'c4c4c4c4', 'c5c5c5c5', 'c6c6c6c6', 'c7c7c7c7']) {
+        await deploy(sha);
+        now += 1000;
+      }
+      const short = section((await get(`/env/${prodId}`)).body, 'history');
+      expect(bodyRows(short)).toBe(5);
+      expect(short).toContain('c7c7c7c');
+      expect(short).not.toContain('c1c1c1c');
+      expect(short).toContain('data-testid="history-all"');
+      expect(short).toContain(`href="/env/${prodId}?history=all#history"`);
+      expect(bodyRows(section((await get(`/env/${prodId}?history=all`)).body, 'history'))).toBe(7);
+    });
+
+    it('creates a server from server_name only and returns the block with it selected', async () => {
+      const res = await post('/settings/servers', { server_name: 'edge', name: 'production' });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.body).toContain('id="srv"');
+      expect(res.body).toContain('data-testid="agent-token"');
+      const edge = (await repo.listServers()).find((s) => s.name === 'edge');
+      expect(edge).toBeDefined();
+      expect(res.body).toMatch(new RegExp(`<option value="${edge!.id}" selected`));
+      expect((await repo.listServers()).some((s) => s.name === 'production')).toBe(false);
+      expect(res.body).toContain('data-testid="agent-status" data-status="offline"');
+    });
+
+    it('answers 422 for a taken or empty server name and creates nothing', async () => {
+      expect((await post('/settings/servers', { server_name: 'main' })).statusCode).toBe(422);
+      expect((await post('/settings/servers', { server_name: '  ' })).statusCode).toBe(422);
+      expect(await repo.listServers()).toHaveLength(1);
+    });
+
+    it('returns the server block for a picked server with the environments using it', async () => {
+      const res = await get(`/settings/servers/block?server_id=${serverId}`);
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toMatch(/data-testid="server-used-by"[^>]*>[^<]*production/);
+      expect((await get('/settings/servers/block?server_id=nope')).statusCode).toBe(404);
+    });
+
+    it('answers a failed save of an existing env with 422 and the whole env page', async () => {
+      const res = await post('/settings/env', { id: prodId, name: '' });
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toContain('<section id="releases"');
+      expect(res.body).toContain('data-testid="env-error"');
+    });
+  });
 });
