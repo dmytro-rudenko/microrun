@@ -9,7 +9,7 @@ import { setLangCookie } from '../auth.ts';
 import { decrypt, encrypt, hashToken, newToken } from '../crypto.ts';
 import { composeRefOf, type Cursor, type EnvRow, type FeedRow, type OperationRow, type ReleaseRow, type ServerRow } from '../db/repo.ts';
 import { short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
-import { envView, newEnvView } from '../ui/env.ts';
+import { envView, newEnvView, olderPage, OLDER_PAGE_SIZE, splitReleases } from '../ui/env.ts';
 import { alert } from '../ui/form.ts';
 import { releaseHistory, type HistoryVM } from '../ui/history.ts';
 import { envDot, feedPage, homeView, type FeedRowVM, type HomeVM } from '../ui/home.ts';
@@ -442,6 +442,22 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const env = await repo.getEnv(req.params.id);
     if (!env) return reply.code(404).send();
     return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false });
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { before?: unknown } }>('/env/:id/older', async (req, reply) => {
+    const env = await repo.getEnv(req.params.id);
+    if (!env) return reply.code(404).send();
+    const before = parseCursor(req.query.before);
+    if (before === 'bad') return reply.code(400).send();
+    const vm = await oneEnvVM(d, env);
+    const { older } = splitReleases(vm.releases);
+    const remaining = before
+      ? older.filter((r) => r.deployedAt < before.at || (r.deployedAt === before.at && r.id < before.id))
+      : older;
+    const page = remaining.slice(0, OLDER_PAGE_SIZE);
+    const rest = remaining.length - page.length;
+    const next = rest ? cursorOf(page.at(-1)!) : null;
+    return sendHtml(reply, olderPage(langOf(req), vm, page, rest, next));
   });
 
   app.get<{ Params: { releaseId: string } }>('/panel/:releaseId', async (req, reply) => panelOr404(d, req, reply, req.params.releaseId));

@@ -3,7 +3,7 @@ import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
 import type { EnvVM } from './board.ts';
-import { envView, newEnvView } from './env.ts';
+import { envView, newEnvView, olderPage, splitReleases } from './env.ts';
 import { releaseHistory } from './history.ts';
 import { homeView, type HomeVM } from './home.ts';
 import { layout } from './layout.ts';
@@ -214,7 +214,7 @@ describe('homeView', () => {
 describe('envView', () => {
   const i = i18n('en');
 
-  test('renders one row per release with testid rel-<env>-<sha7> and data-state', () => {
+  test('renders two rows in the top table and keeps testid rel-<env>-<sha7> and data-state for each release', () => {
     const e = env('stage', {
       releases: [
         release({ id: 'r-a', sha: sha('1111111'), state: 'active' }),
@@ -222,8 +222,10 @@ describe('envView', () => {
         release({ id: 'r-c', sha: sha('3333333'), state: 'expired', windowLeftMs: null, windowPct: null }),
       ],
     });
-    const out = envView(i, e, NOW, parts).__html;
-    expect(out.match(/data-testid="rel-stage-/g)).toHaveLength(3);
+    const initial = envView(i, e, NOW, parts).__html;
+    const top = /data-testid="env-in-window"[\s\S]*?<\/table>/.exec(initial)?.[0] ?? '';
+    expect(top.match(/data-testid="rel-stage-/g) ?? []).toHaveLength(2);
+    const out = initial + olderPage(i, e, splitReleases(e.releases).older, 0, null).__html;
     expect(tagOf(out, 'rel-stage-1111111')).toContain('data-state="active"');
     expect(tagOf(out, 'rel-stage-2222222')).toContain('data-state="blocked"');
     expect(tagOf(out, 'rel-stage-3333333')).toContain('data-state="expired"');
