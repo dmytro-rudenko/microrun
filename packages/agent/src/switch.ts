@@ -4,6 +4,9 @@ import { AgentError, type ComposeRef, type ServiceSpec } from '@microrun/core/pr
 import { docker } from './docker.ts';
 import { OVERRIDE_FILE, composeArgs, composeConfig, hasHealthcheck, writeOverride, type ComposeModel } from './compose.ts';
 
+const STDERR_CAP = 2048;
+const capped = (s: string) => (s.length > STDERR_CAP ? `…${s.slice(-STDERR_CAP)}` : s);
+
 export interface ProxyHook {
   addUpstreams(svc: ServiceSpec, containers: string[]): Promise<void>;
   removeUpstreams(svc: ServiceSpec, containers: string[]): Promise<void>;
@@ -27,12 +30,13 @@ async function must(args: string[]): Promise<string> {
   return r.stdout;
 }
 
-async function imageId(ref: string): Promise<string> {
-  return (await must(['image', 'inspect', '--format', '{{.Id}}', ref])).trim();
+async function imageId(ref: string): Promise<string | null> {
+  const r = await docker(['image', 'inspect', '--format', '{{.Id}}', ref]);
+  return r.code === 0 ? r.stdout.trim() : null;
 }
 
-async function containers(c: ComposeRef, service: string): Promise<Container[]> {
-  const ids = (await must(['ps', '-q',
+async function containers(c: ComposeRef, service: string, all = false): Promise<Container[]> {
+  const ids = (await must(['ps', '-q', ...(all ? ['-a'] : []),
     '--filter', `label=com.docker.compose.project=${c.project}`,
     '--filter', `label=com.docker.compose.service=${service}`,
     '--filter', 'label=com.docker.compose.oneoff=False',
@@ -42,7 +46,7 @@ async function containers(c: ComposeRef, service: string): Promise<Container[]> 
   return out.split('\n').filter(Boolean).map((line) => {
     const x = JSON.parse(line) as { Id: string; Name: string; Image: string; Config?: { Image?: string }; State: { Status: string; Health?: { Status: string } } };
     return { id: x.Id, name: x.Name.replace(/^\//, ''), image: x.Image, ref: x.Config?.Image ?? x.Image, status: x.State.Status, health: x.State.Health?.Status ?? '' };
-  }).filter((x) => x.status === 'running');
+  }).filter((x) => all || x.status === 'running');
 }
 
 async function readOverride(c: ComposeRef): Promise<Record<string, string>> {
@@ -57,13 +61,13 @@ async function readOverride(c: ComposeRef): Promise<Record<string, string>> {
 }
 
 const ready = (x: Container) => x.status === 'running' && (x.health === '' || x.health === 'healthy');
-const broken = (x: Container) => x.health === 'unhealthy';
+const broken = (x: Container) => x.health === 'unhealthy' || x.status === 'exited' || x.status === 'dead';
 
 async function waitReady(c: ComposeRef, svc: string, target: string, count: number, exclude: Set<string>, timeoutMs: number): Promise<Container[] | null> {
   const limit = deadline(timeoutMs);
   try {
     for (;;) {
-      const fresh = (await containers(c, svc)).filter((x) => x.image === target && !exclude.has(x.id));
+      const fresh = (await containers(c, svc, true)).filter((x) => x.image === target && !exclude.has(x.id));
       if (fresh.some(broken)) return null;
       if (fresh.length >= count && fresh.every(ready)) return fresh;
       if (limit.expired()) return null;
@@ -78,9 +82,16 @@ async function removeContainers(ids: string[]): Promise<void> {
   if (ids.length) await docker(['rm', '-f', ...ids]);
 }
 
+async function restoreOverride(c: ComposeRef, images: Record<string, string>, previous: Record<string, string>): Promise<void> {
+  for (const k of Object.keys(images)) delete images[k];
+  Object.assign(images, previous);
+  await writeOverride(c, images);
+}
+
 async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, proxy: ProxyHook | null,
   images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
-  const target = await imageId(svc.image);
+  await removeContainers((await containers(c, svc.name, true)).filter((x) => x.status !== 'running').map((x) => x.id));
+  let target = await imageId(svc.image);
   const running = await containers(c, svc.name);
   const old = running.filter((x) => x.image !== target);
   const present = running.filter((x) => x.image === target);
@@ -92,21 +103,19 @@ async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, 
   images[svc.name] = svc.image;
   await writeOverride(c, images);
 
-  const fail = async (): Promise<never> => {
-    const fresh = (await containers(c, svc.name)).filter((x) => !oldIds.has(x.id));
-    await removeContainers(fresh.map((x) => x.id));
-    for (const k of Object.keys(images)) delete images[k];
-    Object.assign(images, previous);
-    await writeOverride(c, images);
-    throw new AgentError('HEALTHCHECK_FAILED', { svc: svc.name });
+  const fail = async (err: AgentError): Promise<never> => {
+    await removeContainers((await containers(c, svc.name, true)).filter((x) => !oldIds.has(x.id)).map((x) => x.id));
+    await restoreOverride(c, images, previous);
+    throw err;
   };
 
   if (present.length < n) {
     const up = await docker(composeArgs(c, ['up', '-d', '--no-deps', '--no-recreate', '--scale', `${svc.name}=${old.length + n}`, svc.name]));
-    if (up.code !== 0) return fail();
+    if (up.code !== 0) return fail(new AgentError('IMAGE_PULL_FAILED', { svc: svc.name, stderr: capped(up.stderr.trim()) }));
   }
-  const fresh = await waitReady(c, svc.name, target, n, oldIds, healthTimeoutS * 1000);
-  if (!fresh) return fail();
+  target ??= await imageId(svc.image);
+  const fresh = target ? await waitReady(c, svc.name, target, n, oldIds, healthTimeoutS * 1000) : null;
+  if (!fresh) return fail(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 
   await proxy?.addUpstreams(svc, fresh.map((x) => x.name));
   for (const [i, x] of old.entries()) {
@@ -120,19 +129,27 @@ async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, 
 
 async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
   images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
-  const target = await imageId(svc.image);
+  let target = await imageId(svc.image);
   const before = await containers(c, svc.name);
-  if (before.length > 0 && before.every((x) => x.image === target && ready(x))) return false;
+  if (target && before.length > 0 && before.every((x) => x.image === target && ready(x))) return false;
   const previous = { ...images };
   if (!previous[svc.name] && before[0]) previous[svc.name] = before[0].ref;
   images[svc.name] = svc.image;
   await writeOverride(c, images);
-  const withHealth = await hasHealthcheck((await model()).services[svc.name] ?? {}, svc.image);
+
+  const rollback = async (err: AgentError): Promise<never> => {
+    await restoreOverride(c, images, previous);
+    const r = await docker(composeArgs(c, ['up', '-d', '--no-deps', svc.name]));
+    if (r.code !== 0) err.params.rollbackStderr = capped(r.stderr.trim());
+    throw err;
+  };
 
   const up = await docker(composeArgs(c, ['up', '-d', '--no-deps', svc.name]));
-  let ok = up.code === 0;
-  if (ok && withHealth) {
-    ok = (await waitReady(c, svc.name, target, 1, new Set(), healthTimeoutS * 1000)) !== null;
+  if (up.code !== 0) return rollback(new AgentError('IMAGE_PULL_FAILED', { svc: svc.name, stderr: capped(up.stderr.trim()) }));
+  target ??= await imageId(svc.image);
+  let ok = target !== null;
+  if (ok && await hasHealthcheck((await model()).services[svc.name] ?? {}, svc.image)) {
+    ok = (await waitReady(c, svc.name, target!, 1, new Set(), healthTimeoutS * 1000)) !== null;
   } else if (ok) {
     const limit = deadline(10_000);
     while (ok && !limit.expired()) {
@@ -142,12 +159,7 @@ async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
     limit.clear();
   }
   if (ok) return true;
-
-  for (const k of Object.keys(images)) delete images[k];
-  Object.assign(images, previous);
-  await writeOverride(c, images);
-  await docker(composeArgs(c, ['up', '-d', '--no-deps', svc.name]));
-  throw new AgentError('HEALTHCHECK_FAILED', { svc: svc.name });
+  return rollback(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 }
 
 export async function switchServices(c: ComposeRef, services: ServiceSpec[], healthTimeoutS: number, proxy: ProxyHook | null): Promise<{ replaced: string[] }> {

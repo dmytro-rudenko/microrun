@@ -1,11 +1,12 @@
 import { existsSync } from 'node:fs';
 import { rename, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import type { ComposeRef, ResultMap } from '@microrun/core/protocol';
+import { AgentError, type ComposeRef, type ResultMap } from '@microrun/core/protocol';
 import { docker } from './docker.ts';
 
 export const OVERRIDE_FILE = 'docker-compose.microrun.yml';
+const RUN_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface ComposePort { target: number; published?: string | number; host_ip?: string; protocol?: string }
 export interface ComposeService {
@@ -28,7 +29,7 @@ export function composeArgs(c: ComposeRef, extra: string[] = []): string[] {
   const override = join(c.dir, OVERRIDE_FILE);
   return [
     'compose', '-p', c.project, '--project-directory', c.dir,
-    ...c.files.flatMap((f) => ['-f', f]),
+    ...c.files.flatMap((f) => ['-f', resolve(c.dir, f)]),
     ...(existsSync(override) ? ['-f', override] : []),
     ...extra,
   ];
@@ -66,21 +67,50 @@ export async function writeOverride(c: ComposeRef, images: Record<string, string
   await rename(tmp, path);
 }
 
+const SECRET_NAME = /(URL|URI|DSN|CONN|PASS|PASSWORD|SECRET|TOKEN|KEY|CRED|AUTH)/i;
+
+function secretValues(env: Record<string, string>): string[] {
+  return Object.entries(env)
+    .filter(([k, v]) => SECRET_NAME.test(k) && v.length >= 6)
+    .map(([, v]) => v)
+    .sort((a, b) => b.length - a.length);
+}
+
+function envFileLine(k: string, v: string): string {
+  if (!/['\n\r]/.test(v)) return `${k}='${v}'`;
+  const escaped = v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$')
+    .replace(/\r/g, '\\r').replace(/\n/g, '\\n');
+  return `${k}="${escaped}"`;
+}
+
 export async function runOneOff(
   c: ComposeRef,
-  p: { service: string; image: string; cmd: string; args: string[]; env: Record<string, string> },
+  p: { service: string; image: string; cmd: string; args: string[]; env: Record<string, string>; timeoutMs?: number },
 ): Promise<{ exitCode: number; stdout: string; log: string }> {
-  const tmp = join(c.dir, `.microrun-run-${randomBytes(6).toString('hex')}.yml`);
-  await writeFile(tmp, overrideYaml({ [p.service]: p.image }));
+  const id = randomBytes(6).toString('hex');
+  const tmp = join(c.dir, `.microrun-run-${id}.yml`);
+  const envFile = join(c.dir, `.microrun-env-${id}`);
+  const name = `microrun-run-${id}`;
+  const hasEnv = Object.keys(p.env).length > 0;
   try {
+    await writeFile(tmp, overrideYaml({ [p.service]: p.image }));
+    if (hasEnv) {
+      const body = Object.entries(p.env).map(([k, v]) => envFileLine(k, v)).join('\n');
+      await writeFile(envFile, `${body}\n`, { mode: 0o600 });
+    }
     const r = await docker(composeArgs(c, [
-      '-f', tmp, 'run', '--rm', '--no-deps', '-T',
-      ...Object.entries(p.env).flatMap(([k, v]) => ['-e', `${k}=${v}`]),
-      p.service, 'sh', '-c', `${p.cmd} "$@"`, 'sh', ...p.args,
-    ]));
+      '-f', tmp, 'run', '--rm', '--no-deps', '-T', '--name', name,
+      ...(hasEnv ? ['--env-from-file', envFile] : []),
+      p.service, '/bin/sh', '-c', `${p.cmd} "$@"`, 'sh', ...p.args,
+    ]), { redact: secretValues(p.env), timeoutMs: p.timeoutMs ?? RUN_TIMEOUT_MS });
+    if (r.timedOut) {
+      await docker(['rm', '-f', name]);
+      throw new AgentError('MIGRATION_FAILED', { reason: 'timeout', cmd: p.cmd.trim().split(/\s+/)[0] ?? '' });
+    }
     return { exitCode: r.code, stdout: r.stdout, log: r.stderr };
   } finally {
     await rm(tmp, { force: true });
+    await rm(envFile, { force: true });
   }
 }
 

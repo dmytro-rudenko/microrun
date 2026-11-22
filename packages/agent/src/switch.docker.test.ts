@@ -1,17 +1,20 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AgentError, type ComposeRef, type ServiceSpec } from '@microrun/core/protocol';
 import { inspectEnv, runOneOff } from './compose.ts';
+import { docker } from './docker.ts';
 import { switchServices, type ProxyHook } from './switch.ts';
 
 const project = `mrt-switch-${randomBytes(3).toString('hex')}`;
 const images = { a: 'mr-t:a', b: 'mr-t:b', bad: 'mr-t:bad', hc: 'mr-t:hc', exit: 'mr-t:exit' };
 
 let dir = '';
+let cwdBefore = '';
+let runCwd = '';
 let ref: ComposeRef;
 let edgeUrl = '';
 
@@ -36,6 +39,27 @@ function compose(...extra: string[]): string[] {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function envFiles(): Promise<string[]> {
+  const found: string[] = [];
+  for (const d of [dir, tmpdir()]) {
+    for (const f of await readdir(d).catch(() => [] as string[])) {
+      if (f.startsWith('.microrun-env-')) found.push(join(d, f));
+    }
+  }
+  return found;
+}
+
+async function processesExposing(value: string): Promise<string[]> {
+  const hits: string[] = [];
+  for (const pid of (await readdir('/proc')).filter((x) => /^\d+$/.test(x))) {
+    for (const part of ['cmdline', 'environ']) {
+      const data = await readFile(`/proc/${pid}/${part}`).catch(() => null);
+      if (data?.includes(value)) hits.push(`${pid}/${part}`);
+    }
+  }
+  return hits;
+}
 
 async function imageId(tag: string): Promise<string> {
   return (await dk(['image', 'inspect', '--format', '{{.Id}}', tag])).trim();
@@ -141,7 +165,10 @@ beforeAll(async () => {
   dir = await mkdtemp(join(tmpdir(), 'mrt-switch-'));
   await writeFile(join(dir, 'compose.yml'), composeYml);
   await writeFile(join(dir, 'edge.conf'), edgeConf);
-  ref = { project, dir, files: [join(dir, 'compose.yml')] };
+  ref = { project, dir, files: ['compose.yml'] };
+  cwdBefore = process.cwd();
+  runCwd = await mkdtemp(join(tmpdir(), 'mrt-cwd-'));
+  process.chdir(runCwd);
 
   await dk(compose('up', '-d', '--wait'));
   const port = (await dk(compose('port', 'edge', '80'))).trim();
@@ -150,6 +177,8 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (cwdBefore) process.chdir(cwdBefore);
+  if (runCwd) await rm(runCwd, { recursive: true, force: true });
   if (dir) {
     await sh('docker', compose('down', '-v', '--remove-orphans', '-t', '1'));
     const left = (await sh('docker', ['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`])).stdout
@@ -241,8 +270,77 @@ describe('switchServices (real Docker)', () => {
     expect(await request()).toBe(true);
   });
 
-  it('calls addUpstreams with the new container names before stopping the old ones, removeUpstreams after with the old names', async () => {
+  it('an image whose containers exit at once fails with HEALTHCHECK_FAILED, leaves no container behind, and the next switch succeeds', async () => {
+    const a = await imageId(images.a);
     const b = await imageId(images.b);
+    const exit = await imageId(images.exit);
+    const before = (await appContainers()).map((c) => c.id).sort();
+    expect(before).toHaveLength(2);
+
+    const err = await switchServices(ref, rolling(images.exit), 15, null).then(
+      () => { throw new Error('switchServices resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('HEALTHCHECK_FAILED');
+    expect((err as AgentError).params).toEqual({ svc: 'app' });
+
+    const all = (await dk(['ps', '-aq', '--filter', `label=com.docker.compose.project=${project}`,
+      '--filter', 'label=com.docker.compose.service=app'])).split('\n').filter(Boolean);
+    const allImages = (await dk(['inspect', '--format', '{{.Image}}', ...all])).split('\n').filter(Boolean);
+    expect(allImages).not.toContain(exit);
+    expect((await appContainers()).map((c) => c.id).sort()).toEqual(before);
+    expect((await appContainers()).every((c) => c.image === a)).toBe(true);
+
+    const result = await switchServices(ref, rolling(images.b), 60, null);
+    expect(result.replaced).toEqual(['app']);
+    const after = await appContainers();
+    expect(after).toHaveLength(2);
+    expect(after.every((c) => c.image === b && c.health === 'healthy')).toBe(true);
+  });
+
+  it('an up that cannot get the image throws IMAGE_PULL_FAILED with the compose stderr and keeps the old containers', async () => {
+    const b = await imageId(images.b);
+    const before = (await appContainers()).map((c) => c.id).sort();
+    expect(before).toHaveLength(2);
+
+    const err = await switchServices(ref, rolling('mr-t:missing'), 15, null).then(
+      () => { throw new Error('switchServices resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('IMAGE_PULL_FAILED');
+    expect((err as AgentError).params.svc).toBe('app');
+    expect(String((err as AgentError).params.stderr)).toMatch(/mr-t/);
+
+    const after = await appContainers();
+    expect(after.map((c) => c.id).sort()).toEqual(before);
+    expect(after.every((c) => c.image === b)).toBe(true);
+    expect(await request()).toBe(true);
+  });
+
+  it('IMAGE_PULL_FAILED keeps only the last 2048 chars of a long compose stderr', async () => {
+    const vars = Array.from({ length: 60 }, (_, i) => `      N${i}: "\${MR_T_UNSET_VARIABLE_NUMBER_${i}}"`);
+    await writeFile(join(dir, 'noise.yml'), ['services:', '  noise:', `    image: ${images.a}`, '    environment:', ...vars, ''].join('\n'));
+    const noisy: ComposeRef = { project, dir, files: ['compose.yml', 'noise.yml'] };
+    const before = (await appContainers()).map((c) => c.id).sort();
+
+    const err = await switchServices(noisy, rolling('mr-t:missing'), 15, null).then(
+      () => { throw new Error('switchServices resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('IMAGE_PULL_FAILED');
+    const stderr = String((err as AgentError).params.stderr);
+    expect(stderr.startsWith('…')).toBe(true);
+    expect(stderr.length).toBeLessThanOrEqual(2049);
+    expect(stderr.length).toBeGreaterThan(2000);
+    expect(stderr).toMatch(/pull access denied for mr-t/);
+    expect((await appContainers()).map((c) => c.id).sort()).toEqual(before);
+  });
+
+  it('calls addUpstreams with the new container names before stopping the old ones, removeUpstreams after with the old names', async () => {
+    const a = await imageId(images.a);
     const old = await appContainers();
     expect(old).toHaveLength(2);
     const oldIds = new Set(old.map((c) => c.id));
@@ -257,11 +355,11 @@ describe('switchServices (real Docker)', () => {
       },
     };
 
-    await switchServices(ref, rolling(images.b), 60, proxy);
+    await switchServices(ref, rolling(images.a), 60, proxy);
 
     const after = await appContainers();
     expect(after).toHaveLength(2);
-    expect(after.every((c) => c.image === b)).toBe(true);
+    expect(after.every((c) => c.image === a)).toBe(true);
     expect(events).toEqual([
       { kind: 'add', svc: 'app', containers: after.map((c) => c.name).sort(), oldRunning: 2 },
       { kind: 'remove', svc: 'app', containers: old.map((c) => c.name).sort(), oldRunning: 0 },
@@ -299,15 +397,104 @@ describe('switchServices (real Docker)', () => {
     expect(echo.exitCode).toBe(0);
     expect(echo.stdout.trim()).toBe('hello world');
 
-    const env = await runOneOff(ref, { service: 'edge', image: 'nginx:1.27-alpine', cmd: 'printenv', args: ['MR_T_VALUE'], env: { MR_T_VALUE: 'v-42' } });
+    const env = await runOneOff(ref, { service: 'edge', image: 'nginx:1.27-alpine', cmd: 'printenv MR_T_PASSWORD >&2; printenv', args: ['MR_T_PASSWORD'], env: { MR_T_PASSWORD: 'v-42-secret' } });
     expect(env.exitCode).toBe(0);
-    expect(env.stdout.trim()).toBe('v-42');
+    expect(env.stdout.trim()).toBe('***');
+    expect(env.log).toContain('***');
+    expect(env.log).not.toContain('v-42-secret');
 
     const fail = await runOneOff(ref, { service: 'edge', image: 'nginx:1.27-alpine', cmd: 'exit', args: ['3'], env: {} });
     expect(fail.exitCode).toBe(3);
 
     const leftovers = (await sh('ls', ['-a', dir])).stdout.split('\n').filter((f) => f.startsWith('.microrun-run-'));
     expect(leftovers).toEqual([]);
+  });
+
+  it('runOneOff redacts only secret-named env values of 6+ chars, so protocol lines stay intact', async () => {
+    const dbUrl = 'postgres://mr:s3cr3t-pw@db:5432/app';
+    const r = await runOneOff(ref, {
+      service: 'edge',
+      image: 'nginx:1.27-alpine',
+      cmd: `echo '{"rule":"x","count":5432}'; echo '{"rule":"y","count":1}'; printenv MR_DB_URL MR_MODE MR_PORT; printenv MR_T_SECRET >&2; printenv MR_MODE >&2`,
+      args: [],
+      env: { MR_PORT: '5432', MR_DB_URL: dbUrl, MR_MODE: 'production', MR_API_KEY: '1', MR_T_SECRET: 'hunter22' },
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim().split('\n')).toEqual([
+      '{"rule":"x","count":5432}',
+      '{"rule":"y","count":1}',
+      '***',
+      'production',
+      '5432',
+    ]);
+    expect(r.log).toContain('***');
+    expect(r.log).toContain('production');
+    expect(r.log).not.toContain('hunter22');
+  });
+
+  it('runOneOff passes env through a 0600 env file, never through the docker CLI env or argv', async () => {
+    const mark = `mr-mark-${randomBytes(6).toString('hex')}`;
+    const seen = new Map<string, number>();
+    const exposed = new Set<string>();
+    let running = true;
+    const watch = (async () => {
+      while (running) {
+        for (const f of await envFiles()) {
+          const st = await stat(f).catch(() => null);
+          if (st) seen.set(f, st.mode & 0o777);
+        }
+        for (const hit of await processesExposing(mark)) exposed.add(hit);
+        await sleep(100);
+      }
+    })();
+
+    let r: { exitCode: number; stdout: string; log: string };
+    try {
+      r = await runOneOff(ref, {
+        service: 'edge',
+        image: 'nginx:1.27-alpine',
+        cmd: 'echo "$DOCKER_HOST|$PATH|$MR_T_MARK"; /bin/sleep 3',
+        args: [],
+        env: { DOCKER_HOST: 'tcp://127.0.0.1:1', PATH: '/nonexistent', MR_T_MARK: mark },
+      });
+    } finally {
+      running = false;
+      await watch;
+    }
+
+    expect(r.log).not.toMatch(/ENOENT|Cannot connect|not found/);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe(`tcp://127.0.0.1:1|/nonexistent|${mark}`);
+    expect([...exposed]).toEqual([]);
+    expect(seen.size).toBeGreaterThan(0);
+    expect([...seen.values()].every((m) => m === 0o600)).toBe(true);
+    expect(await envFiles()).toEqual([]);
+  });
+
+  it('runOneOff caps a 10 MiB+ stdout with a [truncated] marker', async () => {
+    const r = await runOneOff(ref, { service: 'edge', image: 'nginx:1.27-alpine', cmd: "head -c 11000000 /dev/zero | tr '\\0' a", args: [], env: {} });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.endsWith('\n[truncated]')).toBe(true);
+    expect(r.stdout.length).toBe(10 * 1024 * 1024 + '\n[truncated]'.length);
+    expect(/^a+$/.test(r.stdout.slice(0, 10 * 1024 * 1024))).toBe(true);
+  });
+
+  it('runOneOff past its timeout throws MIGRATION_FAILED with reason timeout and the command name', async () => {
+    const err = await runOneOff(ref, { service: 'edge', image: 'nginx:1.27-alpine', cmd: 'sleep 30', args: [], env: { MR_T_X: 'y' }, timeoutMs: 1500 }).then(
+      () => { throw new Error('runOneOff resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('MIGRATION_FAILED');
+    expect((err as AgentError).params.reason).toBe('timeout');
+    expect((err as AgentError).params.cmd).toBe('sleep');
+    expect(await envFiles()).toEqual([]);
+  });
+
+  it('docker() reports a timeout kill in stderr', async () => {
+    const r = await docker(['events'], { timeoutMs: 500 });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('timeout after 500 ms');
   });
 
   it('inspectEnv reports hasHealthcheck and hostPorts per service', async () => {
