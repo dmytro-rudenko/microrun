@@ -9,7 +9,7 @@ export default {
     'codes.BRANCH_MISMATCH': 'Гілку {branch} не можна деплоїти на {env}: це оточення деплоїть гілку {expected}.',
     'codes.COMMIT_BLOCKED':
       'Коміт {sha} заблоковано на {env}: з нього виконано відкат {at}. Зробіть новий коміт із виправленням і задеплойте його.',
-    'codes.COMMIT_EXPIRED': 'Коміт {sha} прострочений на {env}: вікно відкату закрито. Зробіть новий коміт і задеплойте його.',
+    'codes.COMMIT_EXPIRED': 'Коміт {sha} не можна задеплоїти повторно на {env}: вікно відкату його релізу закрито. Зробіть новий коміт і задеплойте його.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'Руйнівну зміну схеми ({col}) на {env} схвалено для коміту {sha}.',
     'codes.AGENT_OFFLINE': 'Агент оточення {env} офлайн. Деплой і відкат недоступні, доки він не підключиться.',
     'codes.ENV_BUSY': 'Оточення {env} зайняте іншою операцією. Спробуйте за хвилину.',
@@ -48,7 +48,7 @@ export default {
     'codes.BRANCH_MISMATCH': 'Branch {branch} cannot be deployed to {env}: this environment deploys {expected}.',
     'codes.COMMIT_BLOCKED':
       'Commit {sha} is blocked on {env}: it was rolled back {at}. Push a new commit with a fix and deploy it.',
-    'codes.COMMIT_EXPIRED': 'Commit {sha} has expired on {env}: its rollback window has closed. Push a new commit and deploy it.',
+    'codes.COMMIT_EXPIRED': 'Commit {sha} cannot be redeployed on {env}: the rollback window of its release has closed. Push a new commit and deploy it.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'The destructive schema change ({col}) on {env} was approved for commit {sha}.',
     'codes.AGENT_OFFLINE': 'The agent for {env} is offline. Deploy and rollback are unavailable until it reconnects.',
     'codes.ENV_BUSY': '{env} is busy with another operation. Try again shortly.',
@@ -88,7 +88,7 @@ export default {
     'codes.COMMIT_BLOCKED':
       'Commit {sha} ist auf {env} gesperrt: Er wurde am {at} zurückgerollt. Pushen Sie einen neuen Commit mit einer Korrektur und deployen Sie ihn.',
     'codes.COMMIT_EXPIRED':
-      'Commit {sha} ist auf {env} abgelaufen: Das Rollback-Fenster ist geschlossen. Pushen Sie einen neuen Commit und deployen Sie ihn.',
+      'Commit {sha} kann auf {env} nicht erneut deployt werden: Das Rollback-Fenster seines Releases ist geschlossen. Pushen Sie einen neuen Commit und deployen Sie ihn.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'Die destruktive Schemaänderung ({col}) auf {env} wurde für Commit {sha} freigegeben.',
     'codes.AGENT_OFFLINE': 'Der Agent von {env} ist offline. Deploy und Rollback sind nicht verfügbar, bis er sich wieder verbindet.',
     'codes.ENV_BUSY': '{env} ist mit einer anderen Operation beschäftigt. Versuchen Sie es gleich noch einmal.',
@@ -133,7 +133,7 @@ export default {
     'codes.COMMIT_BLOCKED':
       'Le commit {sha} est bloqué sur {env} : il a été annulé le {at}. Poussez un nouveau commit avec un correctif et déployez-le.',
     'codes.COMMIT_EXPIRED':
-      'Le commit {sha} a expiré sur {env} : sa fenêtre de retour arrière est fermée. Poussez un nouveau commit et déployez-le.',
+      'Le commit {sha} ne peut pas être redéployé sur {env} : la fenêtre de rollback de sa release est fermée. Poussez un nouveau commit et déployez-le.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED':
       'La modification destructive du schéma ({col}) sur {env} a été approuvée pour le commit {sha}.',
     'codes.AGENT_OFFLINE':
@@ -180,7 +180,7 @@ export default {
     'codes.COMMIT_BLOCKED':
       'El commit {sha} está bloqueado en {env}: se revirtió el {at}. Suba un nuevo commit con la corrección y despliéguelo.',
     'codes.COMMIT_EXPIRED':
-      'El commit {sha} ha caducado en {env}: su ventana de reversión está cerrada. Suba un nuevo commit y despliéguelo.',
+      'El commit {sha} no se puede volver a desplegar en {env}: la ventana de rollback de su release está cerrada. Suba un nuevo commit y despliéguelo.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'El cambio destructivo del esquema ({col}) en {env} fue aprobado para el commit {sha}.',
     'codes.AGENT_OFFLINE':
       'El agente de {env} está sin conexión. El despliegue y la reversión no están disponibles hasta que se reconecte.',
@@ -225,7 +225,7 @@ export default {
     'codes.COMMIT_BLOCKED':
       'O commit {sha} está bloqueado em {env}: foi revertido em {at}. Envie um novo commit com a correção e implante-o.',
     'codes.COMMIT_EXPIRED':
-      'O commit {sha} expirou em {env}: a janela de rollback foi encerrada. Envie um novo commit e implante-o.',
+      'O commit {sha} não pode ser implantado novamente em {env}: a janela de rollback da release foi encerrada. Envie um novo commit e implante-o.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'A alteração destrutiva do esquema ({col}) em {env} foi aprovada para o commit {sha}.',
     'codes.AGENT_OFFLINE':
       'O agente de {env} está offline. Implantação e rollback ficam indisponíveis até ele se reconectar.',
@@ -270,7 +270,7 @@ export default {
     'codes.COMMIT_BLOCKED':
       'Commit {sha} jest zablokowany na {env}: został wycofany {at}. Wypchnij nowy commit z poprawką i wdróż go.',
     'codes.COMMIT_EXPIRED':
-      'Commit {sha} wygasł na {env}: okno wycofania zostało zamknięte. Wypchnij nowy commit i wdróż go.',
+      'Commitu {sha} nie można ponownie wdrożyć na {env}: okno wycofania jego wydania zostało zamknięte. Wypchnij nowy commit i wdróż go.',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': 'Destrukcyjną zmianę schematu ({col}) na {env} zatwierdzono dla commitu {sha}.',
     'codes.AGENT_OFFLINE':
       'Agent środowiska {env} jest offline. Wdrożenie i wycofanie są niedostępne, dopóki się nie połączy.',
@@ -312,7 +312,7 @@ export default {
     'codes.ALREADY_ACTIVE': '提交 {sha} 已在 {env} 上处于活动状态，无需操作。',
     'codes.BRANCH_MISMATCH': '分支 {branch} 不能部署到 {env}：该环境部署的是 {expected}。',
     'codes.COMMIT_BLOCKED': '提交 {sha} 在 {env} 上已被阻止：它已于 {at} 被回滚。请推送包含修复的新提交并部署。',
-    'codes.COMMIT_EXPIRED': '提交 {sha} 在 {env} 上已过期：其回滚窗口已关闭。请推送新提交并部署。',
+    'codes.COMMIT_EXPIRED': '提交 {sha} 无法在 {env} 上重新部署：其版本的回滚窗口已关闭。请推送新提交并部署。',
     'codes.SCHEMA_DESTRUCTIVE_APPROVED': '{env} 上的破坏性架构变更（{col}）已针对提交 {sha} 获得批准。',
     'codes.AGENT_OFFLINE': '{env} 的代理已离线。在其重新连接之前，无法部署或回滚。',
     'codes.ENV_BUSY': '{env} 正忙于其他操作，请稍后重试。',

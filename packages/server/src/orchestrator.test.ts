@@ -973,31 +973,3 @@ describe('Orchestrator approveDestructive', () => {
     ]);
   });
 });
-
-describe('Orchestrator closeWindow', () => {
-  it.each([
-    ['with', 'npm run contract', A],
-    ['without', null, B],
-  ])('answers ENV_BUSY %s contract_cmd and expires nothing while the env is busy', async (_, contractCmd, closed) => {
-    await setEnv({ contractCmd });
-    await deploy(A);
-    await deploy(B);
-    await repo.createOperation({
-      envId, kind: 'deploy', fromReleaseId: null, toReleaseId: null, actor: 'admin', status: 'running', startedAt: now,
-    });
-    const before = await repo.listReleases(envId);
-    await expect(orch.closeWindow((await rel(closed))!.id)).resolves.toMatchObject({ rejected: { code: 'ENV_BUSY' } });
-    expect(await repo.listReleases(envId)).toEqual(before);
-  });
-
-  it('closes the window without contract_cmd through a succeeded expire operation', async () => {
-    await setEnv({ contractCmd: null });
-    await deploy(A);
-    await deploy(B);
-    const res = await orch.closeWindow((await rel(B))!.id);
-    if (!('operationId' in res)) throw new Error(res.rejected.code);
-    expect(await settle(res.operationId)).toMatchObject({ kind: 'expire', status: 'succeeded', actor: 'admin' });
-    expect(await rel(A)).toMatchObject({ state: 'expired' });
-    expect(await rel(B)).toMatchObject({ state: 'active' });
-  });
-});

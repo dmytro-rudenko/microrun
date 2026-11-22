@@ -28,16 +28,9 @@ function approveSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
   return html`<form class="${SECT}" ${post('/approve', csrf)}>${hidden('envId', env.id)}${hidden('commitSha', r.sha)}
 <b>${tr(i, 'approve.title')}</b>
 <div class="${SMALL}">${tr(i, 'approve.text', { sha: short(r.sha), col: r.failNote?.params.col ?? '' })}</div>
-${expiring.length > 0 && html`<div class="${SMALL}">${tr(i, 'closeWindow.text', { list: expiring.join(', ') })}</div>`}
+${expiring.length > 0 && html`<div class="${SMALL}">${tr(i, 'approve.expires', { list: expiring.join(', ') })}</div>`}
 ${confirmName({ label: tr(i, 'rb.confirm', { name: env.name }), expected: env.name, name: 'confirm', testid: 'approve-name' })}
 ${button({ block: true, variant: 'danger', testid: 'approve-destructive', disabled: true, label: tr(i, 'approve.go') })}</form>`;
-}
-
-function closeWindowSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
-  const expiring = env.releases.filter((x) => x.state === 'available' && x.deployedAt < r.deployedAt).map((x) => short(x.sha));
-  return html`<form class="${SECT}" ${post('/close-window', csrf)}>${hidden('releaseId', r.id)}
-<div class="${SMALL}">${tr(i, 'closeWindow.text', { list: expiring.join(', ') || '—' })}</div>
-${button({ block: true, variant: 'ghost', testid: 'close-window', label: tr(i, 'closeWindow.go') })}</form>`;
 }
 
 function contractSection(i: I18n, r: ReleaseVM, csrf: string): Html {
@@ -111,7 +104,7 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
 <h2 class="my-1 text-2xl font-bold"><span class="font-mono font-bold">${short(r.sha)}</span> ${releaseBadge(i, r.state)}</h2><div>${r.message}</div>
 <div class="mt-1 mb-3 text-xs text-mute">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="mt-2.5 mb-1 text-xs text-mute">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
-${r.state === 'available' && html`${rollbackSection(i, env, r, csrf)}${closeWindowSection(i, env, r, csrf)}`}
+${r.state === 'available' && rollbackSection(i, env, r, csrf)}
 ${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}</div>`;
 }
 
