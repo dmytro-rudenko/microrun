@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
-import { html, raw } from './html.ts';
+import { esc, html, maskUrl, raw } from './html.ts';
 import { boardView } from './board.ts';
 import { envView } from './env.ts';
 import { historyView } from './history.ts';
@@ -35,6 +35,7 @@ function release(over: Partial<ReleaseVM> = {}): ReleaseVM {
     cleanupState: 'none',
     cleanupPreview: null,
     cleanupResult: null,
+    activationSeq: null,
     imagePurged: false,
     ...over,
   };
@@ -60,6 +61,27 @@ const RULES = [
   { rule: 'promo-notifications', description: 'Promo notifications', count: 50 },
   { rule: 'stale-sessions', description: 'Expired sessions', count: 7 },
   { rule: 'empty-rule', description: 'Nothing to delete', count: 0 },
+];
+
+const CREDENTIAL_URLS: [string, string, string][] = [
+  ['postgres://u:secret@h/db', 'postgres://u:***@h/db', 'secret'],
+  ['postgres://u:p@ss@h/db', 'postgres://u:***@h/db', 'p@ss'],
+  ['postgres://u:pa/ss@host/db', 'postgres://u:***@host/db', 'pa/ss'],
+  ['mysql://u:p#w?x@h:3306/db', 'mysql://u:***@h:3306/db', 'p#w?x'],
+  ['postgres://h/db?user=u&password=s3cr3t&sslmode=require', 'postgres://h/db?user=u&password=***&sslmode=require', 's3cr3t'],
+  ['u:s3cr3t@h:5432/db', 'u:***@h:5432/db', 's3cr3t'],
+  ['host=h user=u password=s3cr3t dbname=d', 'host=h user=u password=*** dbname=d', 's3cr3t'],
+  ['mongodb://u:s3cr3t@h1,h2/db?replicaSet=rs', 'mongodb://u:***@h1,h2/db?replicaSet=rs', 's3cr3t'],
+];
+
+const PLAIN_URLS = [
+  'postgres://u@h/db',
+  'postgres://db-host/shop',
+  's3://releases/shop',
+  'postgres://h/db?user=u&sslmode=require',
+  'h:5432/db',
+  'host=h user=u dbname=d',
+  'mongodb://h1,h2/db?replicaSet=rs',
 ];
 
 const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go'];
@@ -224,6 +246,43 @@ describe('envView', () => {
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
+
+  test.each(CREDENTIAL_URLS)('the marker warning url %s is shown without its secret', (url, masked, secret) => {
+    const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }] });
+    const out = envView(i, e, NOW).__html;
+    expect(out).not.toContain(secret);
+    expect(out).toContain(esc(masked));
+    expect(boardView(i, [e], NOW).__html).not.toContain(secret);
+    expect(panelView(i, e, e.releases[0]!, 'csrf-token', NOW).__html).not.toContain(secret);
+  });
+
+  test.each([
+    ...CREDENTIAL_URLS,
+    ['https://ci:hunter2@registry.example.com/shop', 'https://ci:***@registry.example.com/shop', 'hunter2'],
+  ])('the storage target %s is shown without its secret', (target, masked, secret) => {
+    const e = env('stage', { storage: { kind: 'registry', target } });
+    const out = envView(i, e, NOW).__html;
+    expect(out).not.toContain(secret);
+    expect(out).toContain(esc(masked));
+  });
+
+  test.each(PLAIN_URLS)('the url %s without credentials is shown unchanged', (url) => {
+    const e = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url }], storage: { kind: 's3', target: url } });
+    const out = envView(i, e, NOW).__html;
+    expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('maskUrl', () => {
+  test.each(CREDENTIAL_URLS)('masks the secret in %s', (url, masked, secret) => {
+    const out = maskUrl(url);
+    expect(out).not.toContain(secret);
+    expect(out).toBe(masked);
+  });
+
+  test.each(PLAIN_URLS)('leaves %s unchanged', (url) => {
+    expect(maskUrl(url)).toBe(url);
+  });
 });
 
 describe('historyView', () => {
@@ -295,6 +354,15 @@ describe('layout', () => {
     const field = /<input[^>]*name="_csrf"[^>]*>/.exec(page)?.[0];
     expect(field).toContain('type="hidden"');
     expect(field).toContain('value="tok-123"');
+  });
+
+  test.each(LANGS)('the lang select is labelled from the catalog in %s', (lang) => {
+    const li = i18n(lang);
+    const label = li.t('nav.language');
+    expect(label).not.toBe('nav.language');
+    const out = layout({ i: li, title: 'Environments', active: 'envs', csrf: 'tok-123', body: raw('') });
+    expect(tagOf(out, 'lang')).toContain(`aria-label="${label}"`);
+    if (lang !== 'en') expect(out).not.toContain('aria-label="Language"');
   });
 
   test('references the stylesheet and htmx and renders the body', () => {
@@ -409,6 +477,36 @@ describe('cleanupView', () => {
     expect(out).toContain(i.t('codes.CLEANUP_MISMATCH', { expected: 7 }));
     expect(out).not.toContain(mismatch);
   });
+
+  const categoryTemplate = (lang: Lang, category: string) => {
+    const li = i18n(lang);
+    const rules = new Intl.PluralRules(lang);
+    const n = Array.from({ length: 200 }, (_, k) => k).find((k) => rules.select(k) === category);
+    return n === undefined ? undefined : li.t('cl.delete', { n }).replace(li.num(n), '{n}');
+  };
+
+  test.each(['en', 'uk', 'zh-CN'] as const)('the apply label carries one {n} template per plural category in %s and no subset map', (lang) => {
+    const out = cleanupView(i18n(lang), pending, 'csrf-token').__html;
+    expect(out).not.toContain('data-labels');
+    expect(out).toContain('Intl.PluralRules');
+    for (const category of new Intl.PluralRules(lang).resolvedOptions().pluralCategories) {
+      const value = new RegExp(`data-label-${category}="([^"]*)"`).exec(out)?.[1];
+      expect(value, category).toBeDefined();
+      expect(value, category).toContain('{n}');
+      const expected = categoryTemplate(lang, category);
+      if (expected !== undefined) expect(value, category).toBe(expected);
+    }
+  });
+
+  test('30 rules render in under 200 ms', () => {
+    const rules = Array.from({ length: 30 }, (_, k) => ({ rule: `rule-${k}`, description: `Rule ${k}`, count: k < 18 ? 2 ** k : k - 17 }));
+    const r = release({ cleanupState: 'pending', cleanupPreview: rules });
+    const started = performance.now();
+    const out = cleanupView(i, r, 'csrf-token').__html;
+    expect(performance.now() - started).toBeLessThan(200);
+    expect(out.match(/data-testid="cleanup-rule-/g)).toHaveLength(30);
+    expect(out).not.toContain('data-labels');
+  });
 });
 
 describe('panelView', () => {
@@ -491,6 +589,79 @@ describe('panelView', () => {
     const stage = env('stage', { releases: [expired] });
     const out = panelView(i, stage, expired, 'csrf-token', NOW).__html;
     expect(out).not.toContain('/close-window');
+  });
+
+  test('the will-block list is the active release plus available releases activated after the target', () => {
+    const target = release({ id: 'r-t', sha: sha('2222222'), state: 'available', deployedAt: NOW - 2 * DAY, activationSeq: 2 });
+    const active = release({ id: 'r-a', sha: sha('1111111'), state: 'active', deployedAt: NOW - 5 * DAY, activationSeq: 5, windowLeftMs: null, windowPct: null });
+    const later = release({ id: 'r-b', sha: sha('3333333'), state: 'available', deployedAt: NOW - 3 * DAY, activationSeq: 4 });
+    const earlier = release({ id: 'r-c', sha: sha('4444444'), state: 'available', deployedAt: NOW - HOUR, activationSeq: 1 });
+    const stage = env('stage', { releases: [earlier, active, later, target] });
+    const out = panelView(i, stage, target, 'csrf-token', NOW).__html;
+    const from = out.indexOf(i.t('rb.willBlock'));
+    expect(from).toBeGreaterThanOrEqual(0);
+    const list = out.slice(from, out.indexOf('</div>', from));
+    expect(list).toContain('1111111');
+    expect(list).toContain('3333333');
+    expect(list).not.toContain('4444444');
+    expect(list).not.toContain('2222222');
+  });
+
+  test('a missing activationSeq counts as 0 when choosing what the rollback blocks', () => {
+    const target = release({ id: 'r-t', sha: sha('2222222'), state: 'available', activationSeq: null });
+    const activated = release({ id: 'r-b', sha: sha('3333333'), state: 'available', activationSeq: 1 });
+    const never = release({ id: 'r-c', sha: sha('4444444'), state: 'available', activationSeq: null });
+    const active = release({ id: 'r-a', sha: sha('1111111'), state: 'active', activationSeq: null, windowLeftMs: null, windowPct: null });
+    const stage = env('stage', { releases: [active, activated, never, target] });
+    const out = panelView(i, stage, target, 'csrf-token', NOW).__html;
+    const from = out.indexOf(i.t('rb.willBlock'));
+    const list = out.slice(from, out.indexOf('</div>', from));
+    expect(list).toContain('1111111');
+    expect(list).toContain('3333333');
+    expect(list).not.toContain('4444444');
+  });
+
+  test('the approve section lists the sha7 of every available release of the env and no other', () => {
+    const quiet = { windowLeftMs: null, windowPct: null };
+    const bad = release({ id: 'r-bad', sha: sha('fffffff'), state: 'failed', ...quiet, failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users.email' } } });
+    const stage = env('stage', {
+      releases: [
+        bad,
+        release({ id: 'r-act', sha: sha('3333333'), state: 'active', ...quiet }),
+        release({ id: 'r-a1', sha: sha('1111111'), state: 'available' }),
+        release({ id: 'r-a2', sha: sha('2222222'), state: 'available' }),
+        release({ id: 'r-exp', sha: sha('4444444'), state: 'expired', ...quiet }),
+        release({ id: 'r-blk', sha: sha('5555555'), state: 'blocked', ...quiet }),
+      ],
+    });
+    const out = panelView(i, stage, bad, 'csrf-token', NOW).__html;
+    const at = out.lastIndexOf(i.t('approve.title'));
+    expect(at).toBeGreaterThanOrEqual(0);
+    const section = out.slice(at);
+    for (const listed of ['1111111', '2222222']) expect(section).toContain(listed);
+    for (const other of ['3333333', '4444444', '5555555']) expect(section).not.toContain(other);
+  });
+});
+
+describe('production tag', () => {
+  test.each(LANGS)('env.prodTag marks production only, in %s', (lang) => {
+    const li = i18n(lang);
+    const tag = li.t('env.prodTag');
+    expect(tag).not.toBe('env.prodTag');
+    const prod = env('prod');
+    const stage = env('stage');
+    const prodViews = [
+      boardView(li, [prod], NOW).__html,
+      envView(li, prod, NOW).__html,
+      panelView(li, prod, prod.releases[0]!, 'csrf-token', NOW).__html,
+    ];
+    for (const out of prodViews) expect(out).toContain(`>${tag}<`);
+    const stageViews = [
+      boardView(li, [stage], NOW).__html,
+      envView(li, stage, NOW).__html,
+      panelView(li, stage, stage.releases[0]!, 'csrf-token', NOW).__html,
+    ];
+    for (const out of stageViews) expect(out).not.toContain(`>${tag}<`);
   });
 });
 

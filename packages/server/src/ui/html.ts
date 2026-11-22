@@ -18,6 +18,13 @@ export function html(strings: TemplateStringsArray, ...vals: unknown[]): Html {
   return { __html: strings.reduce((out, s, k) => out + s + (k < vals.length ? render(vals[k]) : ''), '') };
 }
 
+const SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
+
+export const maskUrl = (u: string) =>
+  u
+    .replace(SCHEME.test(u) ? /^([a-z][a-z0-9+.-]*:\/\/[^/?#:@]*):.*@/is : /^([^\s/?#:@=]+):.*@/s, '$1:***@')
+    .replace(/(^|[\s?&;])(password)=[^\s&;#]*/gi, '$1$2=***');
+
 export const raw = (s: string): Html => ({ __html: s });
 
 export const tr = (i: I18n, key: string, params?: Record<string, string | number>): Html => raw(i.t(key, params));

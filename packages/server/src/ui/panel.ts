@@ -14,7 +14,7 @@ const nameInput = (i: I18n, env: EnvVM, testid: string, enabled: boolean) =>
 
 function rollbackSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
   const current = env.releases.find((x) => x.state === 'active');
-  const blocked = env.releases.filter((x) => x.deployedAt > r.deployedAt && (x.state === 'active' || x.state === 'available'));
+  const blocked = env.releases.filter((x) => x.state === 'active' || (x.state === 'available' && (x.activationSeq ?? 0) > (r.activationSeq ?? 0)));
   const reason = !env.agentOnline ? 'rb.noAgent' : env.markerWarnings.length > 0 ? 'rb.noMarker' : null;
   return html`<form class="sect" ${post('/rollback', csrf)}>${hidden('envId', env.id)}${hidden('releaseId', r.id)}
 <b>${tr(i, 'rb.title', { from: current ? short(current.sha) : '—', to: short(r.sha) })}</b>
@@ -26,9 +26,11 @@ ${reason && html`<div class="small why">${tr(i, reason)}</div>`}</form>`;
 }
 
 function approveSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html {
+  const expiring = env.releases.filter((x) => x.state === 'available').map((x) => short(x.sha));
   return html`<form class="sect" ${post('/approve', csrf)}>${hidden('envId', env.id)}${hidden('commitSha', r.sha)}
 <b>${tr(i, 'approve.title')}</b>
 <div class="small">${tr(i, 'approve.text', { sha: short(r.sha), col: r.failNote?.params.col ?? '' })}</div>
+${expiring.length > 0 && html`<div class="small">${tr(i, 'closeWindow.text', { list: expiring.join(', ') })}</div>`}
 ${nameInput(i, env, 'approve-name', true)}
 <button type="submit" class="big prod" data-testid="approve-destructive" disabled>${tr(i, 'approve.go')}</button></form>`;
 }
@@ -55,6 +57,16 @@ function failSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html | nu
   return f.code === 'SCHEMA_DESTRUCTIVE' ? html`${text}${approveSection(i, env, r, csrf)}` : text;
 }
 
+const COUNT_SAMPLES = [...Array.from({ length: 200 }, (_, k) => k), 0.5, 1.5, 2.5];
+
+function applyLabels(i: I18n) {
+  const plural = new Intl.PluralRules(i.lang);
+  return plural.resolvedOptions().pluralCategories.flatMap((category) => {
+    const n = COUNT_SAMPLES.find((k) => plural.select(k) === category);
+    return n === undefined ? [] : [html` data-label-${category}="${i.t('cl.delete', { n }).replace(i.num(n), '{n}')}"`];
+  });
+}
+
 export function cleanupView(i: I18n, r: ReleaseVM, csrf: string): Html {
   const rules = r.cleanupPreview;
   if (!rules) return html``;
@@ -71,23 +83,21 @@ export function cleanupView(i: I18n, r: ReleaseVM, csrf: string): Html {
   }
   if (r.cleanupState !== 'pending') return html``;
   const total = rules.reduce((n, x) => n + x.count, 0);
-  const sums = rules.reduce((acc, x) => (x.count ? new Set([...acc, ...[...acc].map((s) => s + x.count)]) : acc), new Set([0]));
-  const labels = Object.fromEntries([...sums].map((s) => [s, i.t('cl.delete', { n: s })] as const));
   const recount =
-    "var b=this.querySelector('[data-testid=cleanup-apply]'),s=0;this.querySelectorAll('input:checked').forEach(function(c){s+=+c.dataset.n});b.textContent=JSON.parse(b.dataset.labels)[s];b.disabled=!s";
+    "var b=this.querySelector('[data-testid=cleanup-apply]'),s=0,l=document.documentElement.lang;this.querySelectorAll('input:checked').forEach(function(c){s+=+c.dataset.n});b.textContent=(b.getAttribute('data-label-'+new Intl.PluralRules(l).select(s))||b.getAttribute('data-label-other')).replace('{n}',new Intl.NumberFormat(l).format(s));b.disabled=!s";
   return html`<form class="sect" ${post('/cleanup/apply', csrf)} onchange="${recount}">${hidden('releaseId', r.id)}
 <b>${tr(i, 'cl.title', { sha: short(r.sha) })}</b><div class="small">${tr(i, 'cl.sub')}</div>
 ${rules.map(
   (x) => html`<label class="rule" data-testid="cleanup-rule-${x.rule}"><input type="checkbox" name="rules" value="${x.rule}" data-n="${x.count}"${x.count ? ' checked' : ' disabled'}><div><b>${x.rule}</b><div class="small">${x.description}</div></div><span class="n">${i.num(x.count)}</span></label>`,
 )}
-<button type="submit" class="big prod" data-testid="cleanup-apply" data-labels="${JSON.stringify(labels)}"${total ? '' : ' disabled'}>${tr(i, 'cl.delete', { n: total })}</button>
+<button type="submit" class="big prod" data-testid="cleanup-apply"${applyLabels(i)}${total ? '' : ' disabled'}>${tr(i, 'cl.delete', { n: total })}</button>
 <button type="button" class="big ghost" data-testid="cleanup-skip" hx-post="/cleanup/dismiss">${tr(i, 'cl.skip')}</button></form>`;
 }
 
 export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now: number): Html {
   return html`<div class="in${env.isProduction ? ' prod' : ''}" data-testid="panel" data-release="${r.id}">
 <button class="x" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
-<div class="small">${env.name} ${prodTag(env)}</div>
+<div class="small">${env.name} ${prodTag(i, env)}</div>
 <h2><span class="sha">${short(r.sha)}</span> <span class="badge b-${r.state}">${stateLabel(i, r.state)}</span></h2><div>${r.message}</div>
 <div class="small meta">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}
 <div class="small label">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}

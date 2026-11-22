@@ -1,7 +1,7 @@
 import type { I18n } from '@microrun/core/i18n';
 import type { ReleaseState } from '@microrun/core/state';
 import type { DiffEntry } from '@microrun/core/schema';
-import { codeText, html, tr, type Html } from './html.ts';
+import { codeText, html, maskUrl, tr, type Html } from './html.ts';
 
 export interface ReleaseVM {
   id: string;
@@ -18,6 +18,7 @@ export interface ReleaseVM {
   cleanupState: string;
   cleanupPreview: { rule: string; description: string; count: number }[] | null;
   cleanupResult: { rule: string; deleted: number }[] | null;
+  activationSeq: number | null;
   imagePurged: boolean;
 }
 
@@ -42,7 +43,7 @@ const SIGNS = { add: '+', drop: '−', warn: '!' } as const;
 
 export const short = (sha: string) => sha.slice(0, 7);
 
-export const prodTag = (e: EnvVM) => (e.isProduction ? html`<span class="tag">PRODUCTION</span>` : null);
+export const prodTag = (i: I18n, e: EnvVM) => (e.isProduction ? html`<span class="tag">${tr(i, 'env.prodTag')}</span>` : null);
 
 export const windowText = (i: I18n, e: EnvVM) => i.left(e.retentionS * 1000);
 
@@ -52,7 +53,7 @@ export const agentBadge = (i: I18n, e: EnvVM) =>
   html`<span class="agent${e.agentOnline ? '' : ' off'}">● ${tr(i, e.agentOnline ? 'agent.online' : 'agent.offline')}</span>`;
 
 export const markerText = (i: I18n, w: EnvVM['markerWarnings'][number]) =>
-  html`<b>${tr(i, 'marker.title')}</b> ${tr(i, 'marker.text', { svc: w.svc, other: w.other, url: w.url ?? '—' })}`;
+  html`<b>${tr(i, 'marker.title')}</b> ${tr(i, 'marker.text', { svc: w.svc, other: w.other, url: w.url === undefined ? '—' : maskUrl(w.url) })}`;
 
 export const offlineAlert = (i: I18n, e: EnvVM) => (e.agentOnline ? null : html`<div class="alert w">${tr(i, 'agent.offlineLong')}</div>`);
 
@@ -83,7 +84,7 @@ function card(i: I18n, e: EnvVM, r: ReleaseVM, now: number, selected?: string): 
 
 function column(i: I18n, e: EnvVM, now: number, selected?: string): Html {
   return html`<section class="col${e.isProduction ? ' prod' : ''}" data-testid="col-${e.name}">
-<div class="ch"><h2><a href="/env/${e.id}">${e.name}</a></h2>${prodTag(e)}</div>
+<div class="ch"><h2><a href="/env/${e.id}">${e.name}</a></h2>${prodTag(i, e)}</div>
 <div class="meta">${tr(i, 'env.branch', { b: e.branch })} · ${tr(i, 'env.window', { w: windowText(i, e) })} · ${agentBadge(i, e)}</div>
 ${e.markerWarnings.length > 0 && html`<div class="alert">⚠ ${tr(i, 'marker.short')}</div>`}${offlineAlert(i, e)}
 <div class="tl">${e.releases.map((r) => card(i, e, r, now, selected))}</div>
