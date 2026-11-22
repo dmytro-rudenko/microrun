@@ -5,6 +5,7 @@ import type { AgentPort, Command, StorageConfig } from '@microrun/core/protocol'
 import { openDb } from './db/db.ts';
 import { Repo } from './db/repo.ts';
 import type { EnvRow, NewRelease, ReleaseRow } from './db/repo.ts';
+import { Orchestrator } from './orchestrator.ts';
 import { Scheduler } from './scheduler.ts';
 
 const T0 = 1_000_000_000;
@@ -45,6 +46,13 @@ let now: number;
 let scheduler: Scheduler;
 let serverId: string;
 
+function mkScheduler(log?: (line: string) => void): Scheduler {
+  const orch = new Orchestrator({ repo, agent, clock: () => now, decryptStorage: () => STORAGE, emit: () => undefined });
+  return new Scheduler({
+    repo, agent, clock: () => now, decryptStorage: () => STORAGE, runContract: (id) => orch.runContract(id), ...(log ? { log } : {}),
+  });
+}
+
 beforeEach(async () => {
   db = await openDb(':memory:');
   repo = new Repo(db);
@@ -53,7 +61,7 @@ beforeEach(async () => {
   const server = await repo.createServer({ name: 'main', agentTokenHash: 'hash-main', builtin: false });
   serverId = server.id;
   agent.online.add(serverId);
-  scheduler = new Scheduler({ repo, agent, clock: () => now, decryptStorage: () => STORAGE });
+  scheduler = mkScheduler();
 });
 
 afterEach(async () => {
@@ -192,7 +200,7 @@ describe('Scheduler', () => {
     await scheduler.tick();
     let runs = agent.of('runCommand');
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ service: 'web', image: 'app:r1' });
+    expect(runs[0]).toMatchObject({ service: 'web', image: 'app:r1@sha256:r1' });
     expect(fullCmd(runs[0]!)).toContain('npm run contract');
     expect((await release(r1.id)).contractedAt).toBe(T0);
     expect((await release(r2.id)).contractedAt).toBeNull();
@@ -205,7 +213,7 @@ describe('Scheduler', () => {
     await scheduler.tick();
     runs = agent.of('runCommand');
     expect(runs).toHaveLength(2);
-    expect(runs[1]).toMatchObject({ service: 'web', image: 'app:r2' });
+    expect(runs[1]).toMatchObject({ service: 'web', image: 'app:r2@sha256:r2' });
     expect((await release(r2.id)).contractedAt).toBeNull();
     const failed = (await ops(env.id, 'contract')).filter((o) => o.status === 'failed');
     expect(failed).toEqual([expect.objectContaining({ code: 'CONTRACT_FAILED' })]);
@@ -228,7 +236,7 @@ describe('Scheduler', () => {
     const firstIndex = (type: Command['type'], pred: (c: Command) => boolean) =>
       agent.calls.findIndex((c) => c.cmd.type === type && pred(c.cmd));
     const contractOf = (sha: string) =>
-      firstIndex('runCommand', (c) => (c as Extract<Command, { type: 'runCommand' }>).image === `app:${sha}`);
+      firstIndex('runCommand', (c) => (c as Extract<Command, { type: 'runCommand' }>).image.startsWith(`app:${sha}@`));
     const purgeOf = (sha: string) =>
       firstIndex('deleteImages', (c) => (c as Extract<Command, { type: 'deleteImages' }>).sha === sha);
 
@@ -271,8 +279,35 @@ describe('Scheduler', () => {
     await scheduler.tick();
     const runs = agent.of('runCommand');
     expect(runs).toHaveLength(1);
-    expect(runs[0]).toMatchObject({ image: 'app:aaa' });
+    expect(runs[0]).toMatchObject({ image: 'app:aaa@sha256:aaa' });
     expect((await release(active.id)).contractedAt).toBe(T0 + 60_000);
+  });
+
+  it('runs the contract through runContract with MICRORUN_* env, as a system operation', async () => {
+    const env = await mkEnv('staging', { contractCmd: 'npm run contract' });
+    const r = await mkRelease(env.id, 'aaa', 'active', 1000);
+
+    await scheduler.tick();
+    const [run] = agent.of('runCommand');
+    expect(run).toMatchObject({ cmd: 'npm run contract', image: 'app:aaa@sha256:aaa' });
+    expect(run!.env).toMatchObject({ MICRORUN_ENV: 'staging', MICRORUN_RELEASE_COMMIT: 'aaa', MICRORUN_DEPLOYED_AT: new Date(1000).toISOString() });
+    expect(await ops(env.id, 'contract')).toEqual([expect.objectContaining({ status: 'succeeded', actor: 'system', toReleaseId: r.id })]);
+    expect((await release(r.id)).contractedAt).toBe(T0);
+  });
+
+  it('retries storing only active and available releases', async () => {
+    const env = await mkEnv('staging');
+    await mkRelease(env.id, 'act', 'active', 5000, { stored: false });
+    await mkRelease(env.id, 'avl', 'available', 4000, { stored: false, supersededAt: T0 });
+    const failed = await mkRelease(env.id, 'fld', 'failed', 3000, { stored: false });
+    await mkRelease(env.id, 'blk', 'blocked', 2000, { stored: false, blockedAt: T0 });
+    await mkRelease(env.id, 'exp', 'expired', 1000, { stored: false, supersededAt: T0 });
+
+    await scheduler.tick();
+    now = T0 + 60_000;
+    await scheduler.tick();
+    expect(agent.of('storeImages').map((c) => c.sha).sort()).toEqual(['act', 'avl']);
+    expect((await release(failed.id)).stored).toBe(false);
   });
 
   it('retries storing images of an unstored release', async () => {
@@ -323,13 +358,7 @@ describe('Scheduler', () => {
       return listReleases(envId);
     };
     const lines: string[] = [];
-    const s = new Scheduler({
-      repo,
-      agent,
-      clock: () => now,
-      decryptStorage: () => STORAGE,
-      log: (line) => lines.push(line),
-    });
+    const s = mkScheduler((line) => lines.push(line));
 
     await expect(s.tick()).resolves.toBeUndefined();
     expect((await release(okOld.id)).state).toBe('expired');
@@ -408,7 +437,7 @@ describe('Scheduler', () => {
 describe('Scheduler tickEnv edges', () => {
   function logged() {
     const lines: string[] = [];
-    const s = new Scheduler({ repo, agent, clock: () => now, decryptStorage: () => STORAGE, log: (line) => lines.push(line) });
+    const s = mkScheduler((line) => lines.push(line));
     return { s, lines };
   }
 

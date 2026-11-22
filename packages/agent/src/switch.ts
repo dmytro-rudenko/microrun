@@ -18,6 +18,8 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const DNS_DRAIN_MS = 2000;
 
+type Switched = { prev: string | undefined } | null;
+
 function deadline(ms: number) {
   let over = false;
   const timer = setTimeout(() => { over = true; }, ms);
@@ -120,13 +122,13 @@ async function cameUp(c: ComposeRef, svc: ServiceSpec, target: string, healthTim
 }
 
 async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, proxy: ProxyHook | null,
-  images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
+  images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<Switched> {
   await removeContainers((await containers(c, svc.name, true)).filter((x) => x.status !== 'running').map((x) => x.id));
   let target = await imageId(svc.image);
   const running = await containers(c, svc.name);
   const old = running.filter((x) => x.image !== target);
   const present = running.filter((x) => x.image === target);
-  if (old.length === 0 && present.length > 0) return false;
+  if (old.length === 0 && present.length > 0) return null;
   const m = await model();
   const n = old.length || replicasOf(m, svc.name);
   const oldIds = new Set(old.map((x) => x.id));
@@ -149,16 +151,16 @@ async function rolling(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number, 
   if (!fresh) return fail(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 
   await proxy?.addUpstreams(svc, fresh.map((x) => x.name));
-  await stopDrained(old);
   await proxy?.removeUpstreams(svc, old.map((x) => x.name));
-  return true;
+  await stopDrained(old);
+  return { prev: old[0]?.ref };
 }
 
 async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
-  images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<boolean> {
+  images: Record<string, string>, model: () => Promise<ComposeModel>): Promise<Switched> {
   let target = await imageId(svc.image);
   const before = await containers(c, svc.name);
-  if (allCurrent(before, target)) return false;
+  if (allCurrent(before, target)) return null;
   const previous = { ...images };
   if (!previous[svc.name] && before[0]) previous[svc.name] = before[0].ref;
   images[svc.name] = svc.image;
@@ -174,20 +176,31 @@ async function recreate(c: ComposeRef, svc: ServiceSpec, healthTimeoutS: number,
   const up = await docker(composeArgs(c, ['up', '-d', '--no-deps', svc.name]));
   if (up.code !== 0) return rollback(new AgentError('IMAGE_PULL_FAILED', { svc: svc.name, stderr: capped(up.stderr.trim()) }));
   target ??= await imageId(svc.image);
-  if (target !== null && (await cameUp(c, svc, target, healthTimeoutS, model))) return true;
+  if (target !== null && (await cameUp(c, svc, target, healthTimeoutS, model))) return { prev: previous[svc.name] };
   return rollback(new AgentError('HEALTHCHECK_FAILED', { svc: svc.name }));
 }
 
 export async function switchServices(c: ComposeRef, services: ServiceSpec[], healthTimeoutS: number, proxy: ProxyHook | null): Promise<{ replaced: string[] }> {
   const images = await readOverride(c);
+  const initial = { ...images };
   let cached: ComposeModel | null = null;
   const model = async () => (cached ??= await composeConfig(c));
+  const one = (svc: ServiceSpec) => svc.strategy === 'rolling'
+    ? rolling(c, svc, healthTimeoutS, proxy, images, model)
+    : recreate(c, svc, healthTimeoutS, images, model);
   const replaced: string[] = [];
-  for (const svc of services) {
-    const changed = svc.strategy === 'rolling'
-      ? await rolling(c, svc, healthTimeoutS, proxy, images, model)
-      : await recreate(c, svc, healthTimeoutS, images, model);
-    if (changed) replaced.push(svc.name);
+  const undo: ServiceSpec[] = [];
+  try {
+    for (const svc of services) {
+      const r = await one(svc);
+      if (!r) continue;
+      replaced.push(svc.name);
+      if (r.prev) undo.unshift({ ...svc, image: r.prev });
+    }
+  } catch (err) {
+    for (const svc of undo) await one(svc).catch(() => null);
+    await restoreOverride(c, images, initial);
+    throw err;
   }
   return { replaced };
 }

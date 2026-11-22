@@ -37,6 +37,8 @@ function release(over: Partial<ReleaseVM> = {}): ReleaseVM {
     cleanupResult: null,
     activationSeq: null,
     imagePurged: false,
+    stored: true,
+    cleanupFailed: null,
     ...over,
   };
 }
@@ -84,7 +86,9 @@ const PLAIN_URLS = [
   'mongodb://h1,h2/db?replicaSet=rs',
 ];
 
-const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go', 'cl.preparing'];
+const REQUIRED_KEYS = ['nav.envs', 'state.active', 'rb.noMarker', 'approve.title', 'storage.failedWarn', 'contract.retry', 'closeWindow.go', 'cl.preparing', 'kind.approve'];
+
+const KEY_SHAPED = /^[A-Za-z]\w*(\.\w+)+$/;
 
 function expectNoRawKeys(lang: Lang, view: string, out: string) {
   const keys = allKeys()[lang];
@@ -170,6 +174,27 @@ describe('boardView', () => {
     expect(blocked).toContain('data-state="blocked"');
     expect(active).toContain('hx-get="/panel/r-active"');
     expect(active).toContain('hx-target="#panel"');
+  });
+
+  test('warns on the card of an active or available release whose image is not stored, and only there', () => {
+    const warn = i.t('storage.failedWarn');
+    const e = env('stage', {
+      releases: [
+        release({ id: 'r1', sha: sha('1111111'), state: 'active', stored: false }),
+        release({ id: 'r2', sha: sha('2222222'), state: 'available', stored: false }),
+        release({ id: 'r3', sha: sha('3333333'), state: 'available', stored: true }),
+        release({ id: 'r4', sha: sha('4444444'), state: 'expired', stored: false }),
+        release({ id: 'r5', sha: sha('5555555'), state: 'blocked', stored: false }),
+      ],
+    });
+    const out = boardView(i, [e], NOW).__html;
+    const card = (head: string, next?: string) =>
+      out.slice(out.indexOf(`data-testid="rel-stage-${head}"`), next ? out.indexOf(`data-testid="rel-stage-${next}"`) : undefined);
+    expect(card('1111111', '2222222')).toContain(warn);
+    expect(card('2222222', '3333333')).toContain(warn);
+    expect(card('3333333', '4444444')).not.toContain(warn);
+    expect(card('4444444', '5555555')).not.toContain(warn);
+    expect(card('5555555')).not.toContain(warn);
   });
 
   test('a commit message with markup is escaped on the card', () => {
@@ -322,6 +347,15 @@ describe('historyView', () => {
     expect(out).toContain(text);
   });
 
+  test.each(LANGS)('an approve operation is labelled from the catalog in %s', (lang) => {
+    const li = i18n(lang);
+    const label = li.t('kind.approve');
+    expect(label).not.toBe('kind.approve');
+    const out = historyView(li, [op({ kind: 'approve', from: '—', to: sha('2222222') })], envs, '').__html;
+    expect(out).toContain(label);
+    expect(out).not.toContain('kind.approve');
+  });
+
   test('a hostile actor name is escaped', () => {
     const out = historyView(i, [op({ actor: `ci:${EVIL}` })], envs, '').__html;
     expect(out).not.toContain('<img');
@@ -363,6 +397,20 @@ describe('layout', () => {
     const out = layout({ i: li, title: 'Environments', active: 'envs', csrf: 'tok-123', body: raw('') });
     expect(tagOf(out, 'lang')).toContain(`aria-label="${label}"`);
     if (lang !== 'en') expect(out).not.toContain('aria-label="Language"');
+  });
+
+  test('configures htmx to swap 4xx and 5xx responses as errors and skip 204', () => {
+    const meta = /<meta[^>]*name="htmx-config"[^>]*>/.exec(page)?.[0];
+    expect(meta).toBeDefined();
+    const content = /content=(?:'([^']*)'|"([^"]*)")/.exec(meta!);
+    const json = (content?.[1] ?? content?.[2] ?? '').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&');
+    expect(JSON.parse(json)).toEqual({
+      responseHandling: [
+        { code: '204', swap: false },
+        { code: '[23]..', swap: true },
+        { code: '[45]..', swap: true, error: true },
+      ],
+    });
   });
 
   test('references the stylesheet and htmx and renders the body', () => {
@@ -450,6 +498,42 @@ describe('cleanupView', () => {
     expect(out).toContain(i.t('cl.preparing'));
     expect(out).not.toContain('data-testid="cleanup-apply"');
     expect(tagOf(panelView(i, env('stage'), waiting, 'csrf-token', NOW).__html, 'cleanup-pending')).toContain('hx-get="/panel/r-blocked"');
+  });
+
+  test('a failed dry-run shows the failure and a retry-preview button and does not poll', () => {
+    const r = release({
+      id: 'r-blocked',
+      sha: sha('3333333'),
+      state: 'blocked',
+      cleanupState: 'pending',
+      cleanupPreview: null,
+      cleanupFailed: { code: 'MIGRATION_FAILED', params: { sha: '3333333', env: 'stage' } },
+    });
+    const out = cleanupView(i, r, 'csrf-token').__html;
+    expect(out).not.toContain('data-testid="cleanup-pending"');
+    expect(out).not.toContain('hx-trigger="every');
+    expect(out).toContain(i.t('codes.MIGRATION_FAILED', { sha: '3333333', env: 'stage' }));
+    const retry = tagOf(out, 'cleanup-retry');
+    expect(retry).toBeDefined();
+    expect(out).toContain('hx-post="/cleanup/preview"');
+    expect(out).toMatch(/<input type="hidden" name="releaseId" value="r-blocked">/);
+    expect(out).toContain('csrf-token');
+  });
+
+  test.each(LANGS)('the retry-preview button is labelled from the catalog in %s', (lang) => {
+    const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: {} } });
+    const out = cleanupView(i18n(lang), r, 'csrf-token').__html;
+    const label = new RegExp('<[^>]*data-testid="cleanup-retry"[^>]*>([^<]*)<').exec(out)?.[1]?.trim();
+    expect(label).toBeTruthy();
+    expect(label).not.toMatch(KEY_SHAPED);
+  });
+
+  test('a hostile parameter of a failed dry-run is escaped exactly once', () => {
+    const r = release({ cleanupState: 'pending', cleanupPreview: null, cleanupFailed: { code: 'MIGRATION_FAILED', params: { sha: EVIL, env: 'stage' } } });
+    const out = cleanupView(i, r, 'csrf-token').__html;
+    expect(out).not.toContain('<img');
+    expect(out).toContain(EVIL_ESCAPED);
+    expect(out).not.toContain('&amp;lt;');
   });
 
   test('pending with a preview renders the rules and stops polling', () => {
@@ -542,6 +626,25 @@ describe('panelView', () => {
     const go = tagOf(out, 'rollback-go');
     expect(go).toBeDefined();
     expect(isDisabled(go!)).toBe(true);
+  });
+
+  test('has an empty alert slot that rejections are retargeted into', () => {
+    const stage = env('stage');
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    expect(out).toMatch(/<div[^>]*id="panel-alert"[^>]*><\/div>/);
+    expect(out.match(/id="panel-alert"/g)).toHaveLength(1);
+  });
+
+  test.each([
+    ['active', false, true],
+    ['available', false, true],
+    ['available', true, false],
+    ['expired', false, false],
+    ['blocked', false, false],
+  ] as const)('a %s release with stored=%s shows the storage warning: %s', (state, stored, shown) => {
+    const r = release({ state, stored });
+    const out = panelView(i, env('stage', { releases: [r] }), r, 'csrf-token', NOW).__html;
+    expect(out.includes(i.t('storage.failedWarn'))).toBe(shown);
   });
 
   test('for stage rollback-go is enabled', () => {
@@ -725,6 +828,17 @@ describe('every view in every language', () => {
     failed('8888888', 'CONTRACT_FAILED', { sha: '8888888', env: 'prod' }),
     failed('9999999', 'STORAGE_FAILED'),
     failed('aaaaaaa', 'IMAGE_PULL_FAILED', { svc: 'api' }),
+    release({ id: 'ccccccc', sha: sha('ccccccc'), state: 'available', stored: false, deployedAt: NOW - 4 * DAY }),
+    release({
+      id: 'ddddddd',
+      sha: sha('ddddddd'),
+      state: 'blocked',
+      windowLeftMs: null,
+      windowPct: null,
+      cleanupState: 'pending',
+      cleanupPreview: null,
+      cleanupFailed: { code: 'MIGRATION_FAILED', params: { sha: 'ddddddd', env: 'prod' } },
+    }),
   ];
 
   const ops = [
@@ -736,6 +850,8 @@ describe('every view in every language', () => {
     op({ status: 'rejected', reason: { code: 'COMMIT_BLOCKED', params: { sha: '4444444', env: 'prod', at: NOW - DAY } } }),
     op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users_email' } } }),
     op({ status: 'failed', reason: { code: 'CLEANUP_MISMATCH', params: { expected: 50 } } }),
+    op({ kind: 'approve', from: '—' }),
+    op({ kind: 'cleanup', status: 'ok', reason: { code: 'CLEANUP_MISMATCH', params: { expected: 3, deleted: 2 } } }),
   ];
 
   test.each(LANGS)('renders in %s without raw catalog keys', (lang) => {
@@ -755,5 +871,6 @@ describe('every view in every language', () => {
       expectNoRawKeys(lang, `cleanupView ${r.id}`, cleanupView(li, r, 'csrf-token').__html);
     }
     expectNoRawKeys(lang, 'panelView offline', panelView(li, offline, offline.releases[0]!, 'csrf-token', NOW).__html);
+    expectNoRawKeys(lang, 'boardView', boardView(li, [prod, offline], NOW).__html);
   });
 });

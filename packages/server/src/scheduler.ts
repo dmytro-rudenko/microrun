@@ -22,6 +22,7 @@ export class Scheduler {
       agent: AgentPort;
       clock: () => number;
       decryptStorage: (env: EnvRow) => StorageConfig;
+      runContract: (releaseId: string) => Promise<void>;
       intervalMs?: number;
       markerEveryMs?: number;
       log?: (line: string) => void;
@@ -91,7 +92,7 @@ export class Scheduler {
 
   private async store(env: EnvRow): Promise<void> {
     for (const r of await this.d.repo.listReleases(env.id)) {
-      if (r.stored || r.imagePurgedAt !== null) continue;
+      if (r.stored || r.imagePurgedAt !== null || (r.state !== 'active' && r.state !== 'available')) continue;
       try {
         await this.d.agent.call<'storeImages'>(env.serverId, { opId: `store:${r.id}`, step: 'storeImages' }, {
           type: 'storeImages',
@@ -123,7 +124,7 @@ export class Scheduler {
       await repo.updateOperation(op.id, { status: 'succeeded', finishedAt: now });
     }
 
-    if (online && env.contractCmd) await this.contract(env, env.contractCmd, now);
+    if (online && env.contractCmd) await this.contract(env);
 
     if (online) await this.purge(env, retentionMs, now);
 
@@ -133,45 +134,14 @@ export class Scheduler {
     if (online) await this.store(env);
   }
 
-  private async contract(env: EnvRow, cmd: string, now: number): Promise<void> {
+  private async contract(env: EnvRow): Promise<void> {
     const { repo } = this.d;
-    const rs = await repo.listReleases(env.id);
-    const id = nextContract(rs);
-    const r = rs.find((x) => x.id === id);
-    if (!r) return;
+    const id = nextContract(await repo.listReleases(env.id));
+    if (!id) return;
     const ops = await repo.listOperations({ envId: env.id, limit: 1000 });
-    const last = ops.find((o) => o.kind === 'contract' && o.toReleaseId === r.id);
+    const last = ops.find((o) => o.kind === 'contract' && o.toReleaseId === id);
     if (last?.status === 'failed') return;
-    const image = r.images[env.migrationService]?.ref;
-    if (!image) return;
-    const op = await repo.createOperation({
-      envId: env.id,
-      kind: 'contract',
-      fromReleaseId: null,
-      toReleaseId: r.id,
-      actor: 'system',
-      status: 'running',
-      startedAt: now,
-    });
-    try {
-      const res = await this.d.agent.call<'runCommand'>(env.serverId, { opId: op.id, step: 'contract' }, {
-        type: 'runCommand',
-        compose: { project: env.composeProject, dir: env.composeDir, files: env.composeFiles },
-        service: env.migrationService,
-        image,
-        cmd,
-        args: [],
-        env: {},
-      });
-      if (res.log) await repo.appendLog(op.id, res.log);
-      if (res.exitCode !== 0) throw new AgentError('CONTRACT_FAILED', { exitCode: res.exitCode });
-      await repo.patchReleases([{ id: r.id, patch: { contractedAt: now } }]);
-      await repo.updateOperation(op.id, { status: 'succeeded', finishedAt: now });
-    } catch (e) {
-      const params = e instanceof AgentError ? e.params : { message: message(e) };
-      await repo.appendLog(op.id, `CONTRACT_FAILED ${e instanceof AgentError ? e.code : ''}`.trim());
-      await repo.updateOperation(op.id, { status: 'failed', code: 'CONTRACT_FAILED', params, finishedAt: now });
-    }
+    await this.d.runContract(id);
   }
 
   private imagesArgs(env: EnvRow, r: ReleaseRow) {

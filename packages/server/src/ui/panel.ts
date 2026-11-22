@@ -1,6 +1,6 @@
 import type { I18n } from '@microrun/core/i18n';
 import { codeText, html, raw, tr, type Html } from './html.ts';
-import { blockedNote, diffView, prodTag, short, stateLabel, type EnvVM, type ReleaseVM } from './board.ts';
+import { blockedNote, diffView, prodTag, short, stateLabel, storageWarn, unstored, type EnvVM, type ReleaseVM } from './board.ts';
 
 const NAME_GATE = "this.form.querySelector('button[type=submit]').disabled=this.value!==this.dataset.name";
 
@@ -52,7 +52,7 @@ function failSection(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string): Html | nu
   const f = r.failNote;
   if (!f) return null;
   if (f.code === 'CONTRACT_FAILED') return contractSection(i, r, csrf);
-  if (f.code === 'STORAGE_FAILED') return html`<div class="alert w">${tr(i, 'storage.failedWarn')}</div>`;
+  if (f.code === 'STORAGE_FAILED') return unstored(r) ? null : storageWarn(i);
   const text = html`<div class="small failed">${codeText(i, f.code, f.params)}</div>`;
   return f.code === 'SCHEMA_DESTRUCTIVE' ? html`${text}${approveSection(i, env, r, csrf)}` : text;
 }
@@ -69,10 +69,14 @@ function applyLabels(i: I18n) {
 
 export function cleanupView(i: I18n, r: ReleaseVM, csrf: string): Html {
   const rules = r.cleanupPreview;
-  if (!rules)
-    return r.cleanupState === 'pending'
-      ? html`<div class="sect" data-testid="cleanup-pending" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="every 2s" hx-swap="innerHTML"><div class="small">${tr(i, 'cl.preparing')}</div></div>`
-      : html``;
+  if (!rules) {
+    if (r.cleanupState !== 'pending') return html``;
+    const f = r.cleanupFailed;
+    return f
+      ? html`<form class="sect" data-testid="cleanup-failed" ${post('/cleanup/preview', csrf)}>${hidden('releaseId', r.id)}<div class="small failed">${codeText(i, f.code, f.params)}</div>
+<button type="submit" class="big ghost" data-testid="cleanup-retry">${tr(i, 'cl.retry')}</button></form>`
+      : html`<div class="sect" data-testid="cleanup-pending" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="every 2s" hx-swap="innerHTML"><div class="small">${tr(i, 'cl.preparing')}</div></div>`;
+  }
   if (r.cleanupState === 'applied') {
     const applied = rules.flatMap((x) => {
       const res = r.cleanupResult?.find((y) => y.rule === x.rule);
@@ -101,8 +105,9 @@ export function panelView(i: I18n, env: EnvVM, r: ReleaseVM, csrf: string, _now:
   return html`<div class="in${env.isProduction ? ' prod' : ''}" data-testid="panel" data-release="${r.id}">
 <button class="x" type="button" onclick="this.closest('#panel').replaceChildren()" aria-label="${i.t('close')}">×</button>
 <div class="small">${env.name} ${prodTag(i, env)}</div>
+<div id="panel-alert"></div>
 <h2><span class="sha">${short(r.sha)}</span> <span class="badge b-${r.state}">${stateLabel(i, r.state)}</span></h2><div>${r.message}</div>
-<div class="small meta">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}
+<div class="small meta">${r.author} · ${i.date(r.deployedAt)}</div>${blockedNote(i, r)}${unstored(r) && storageWarn(i)}
 <div class="small label">${tr(i, 'col.schema')}</div>${diffView(i, r, true)}
 ${r.state === 'available' && html`${rollbackSection(i, env, r, csrf)}${closeWindowSection(i, env, r, csrf)}`}
 ${failSection(i, env, r, csrf)}${cleanupView(i, r, csrf)}</div>`;

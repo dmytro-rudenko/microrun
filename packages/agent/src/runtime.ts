@@ -5,6 +5,7 @@ import { createHandler, type DockerRun, type Handler } from './handler.ts';
 export { AGENT_VERSION } from './handler.ts';
 
 const MAX_BACKOFF_S = 30;
+const MAX_REASON = 500;
 
 function agentUrl(url: string): string {
   return `${url.replace(/\/+$/, '').replace(/^http/, 'ws')}/api/v1/agent`;
@@ -32,8 +33,9 @@ async function respond(ws: WebSocket, id: string, run: () => Promise<unknown>) {
   try {
     send(ws, { t: 'res', id, ok: true, result: await run() });
   } catch (e) {
-    const a = e instanceof AgentError ? e : new AgentError('INVALID_REQUEST', { reason: e instanceof Error ? e.message : String(e) });
-    send(ws, { t: 'res', id, ok: false, code: a.code, params: a.params, message: e instanceof Error ? e.message : String(e) });
+    const message = e instanceof Error ? e.message : String(e);
+    const a = e instanceof AgentError ? e : new AgentError('AGENT_ERROR', { reason: message.slice(0, MAX_REASON) });
+    send(ws, { t: 'res', id, ok: false, code: a.code, params: a.params, message });
   }
 }
 
@@ -74,6 +76,7 @@ export function runAgent(p: RunAgentParams): { stop(): Promise<void> } {
   let timer: NodeJS.Timeout | undefined;
 
   const onMessage = (ws: WebSocket, msg: ServerMessage) => {
+    if (msg.t !== 'bye') attempt = 0;
     if (msg.t === 'ping') send(ws, { t: 'pong' });
     else if (msg.t === 'req') void respond(ws, msg.id, () => handle(msg.key, msg.cmd));
     else if (msg.code === 'PROTOCOL_MISMATCH') {
@@ -90,7 +93,6 @@ export function runAgent(p: RunAgentParams): { stop(): Promise<void> } {
     const ws = new WebSocket(target, { headers: { authorization: `Bearer ${p.token}` } });
     socket = ws;
     ws.on('open', () => {
-      attempt = 0;
       send(ws, { t: 'hello', protocolVersion: PROTOCOL_VERSION, agentVersion: p.version });
     });
     ws.on('message', (data) => {

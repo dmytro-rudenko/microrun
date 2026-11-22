@@ -14,6 +14,13 @@ const tag = randomBytes(3).toString('hex');
 const testNet = `mrt-proxy-${tag}`;
 const a = `mrt-proxy-${tag}-a`;
 const b = `mrt-proxy-${tag}-b`;
+const c = `mrt-proxy-${tag}-c`;
+const d = `mrt-proxy-${tag}-d`;
+const p1 = `mrt-proxy-${tag}-p1`;
+const p2 = `mrt-proxy-${tag}-p2`;
+const projectNet = (project: string) => `${PROXY}-${project}`;
+const svcP1: ServiceSpec = { name: 'web', strategy: 'rolling', image: 'traefik/whoami:v1.10', domain: 'p1.localhost', port: 80 };
+const svcP2: ServiceSpec = { name: 'web', strategy: 'rolling', image: 'traefik/whoami:v1.10', domain: 'p2.localhost', port: 80 };
 const svc: ServiceSpec = { name: 'web', strategy: 'rolling', image: 'traefik/whoami:v1.10', domain: 'app.localhost', port: 80 };
 
 async function dk(args: string[]): Promise<string> {
@@ -55,10 +62,10 @@ let httpsPort = 0;
 let stateDir = '';
 const savedTls = process.env.MICRORUN_PROXY_TLS;
 
-function hit(): Promise<{ status: number; host: string }> {
+function hit(domain = svc.domain!): Promise<{ status: number; host: string }> {
   return new Promise((resolve, reject) => {
     const req = request(
-      { host: '127.0.0.1', port: httpPort, path: '/', method: 'GET', agent: false, headers: { host: svc.domain! }, timeout: 5000 },
+      { host: '127.0.0.1', port: httpPort, path: '/', method: 'GET', agent: false, headers: { host: domain }, timeout: 5000 },
       (res) => {
         let body = '';
         res.setEncoding('utf8');
@@ -86,6 +93,11 @@ function proxy() {
   return bundledProxy(stateDir, { httpPort, httpsPort, labels: { 'microrun.test': '1' } });
 }
 
+async function proxyNetworks(container: string): Promise<string[]> {
+  const nets = JSON.parse(await dk(['inspect', '--format', '{{json .NetworkSettings.Networks}}', container])) as Record<string, unknown>;
+  return Object.keys(nets).filter((n) => n.startsWith(PROXY)).sort();
+}
+
 async function proxyIds(): Promise<string[]> {
   return (await dk(['ps', '-a', '--filter', `name=^${PROXY}$`, '--format', '{{.ID}}'])).split('\n').filter(Boolean);
 }
@@ -98,8 +110,9 @@ describe.skipIf(blocker !== null)('bundledProxy', () => {
     httpsPort = await freePort();
     stateDir = await mkdtemp(join(tmpdir(), 'mrt-proxy-'));
     await dk(['network', 'create', testNet]);
-    for (const name of [a, b]) {
-      await dk(['run', '-d', '--name', name, '--hostname', name, '--network', testNet, 'traefik/whoami:v1.10']);
+    for (const [name, project] of [[a, p1], [b, p1], [c, p2], [d, p1]] as const) {
+      await dk(['run', '-d', '--name', name, '--hostname', name, '--network', testNet,
+        '--label', `com.docker.compose.project=${project}`, 'traefik/whoami:v1.10']);
     }
   });
 
@@ -107,8 +120,8 @@ describe.skipIf(blocker !== null)('bundledProxy', () => {
     if (savedTls === undefined) delete process.env.MICRORUN_PROXY_TLS;
     else process.env.MICRORUN_PROXY_TLS = savedTls;
     if ((await proxyLabel()) === '1') await docker(['rm', '-f', PROXY]);
-    await docker(['rm', '-f', a, b]);
-    await docker(['network', 'rm', testNet]);
+    await docker(['rm', '-f', a, b, c, d]);
+    await docker(['network', 'rm', testNet, projectNet(p1), projectNet(p2)]);
     if (!networkExisted) await docker(['network', 'rm', PROXY]);
     if (stateDir) {
       await docker(['run', '--rm', '-v', `${stateDir}:/s`, 'caddy:2.10-alpine', 'rm', '-rf', '/s/caddy']);
@@ -170,5 +183,22 @@ describe.skipIf(blocker !== null)('bundledProxy', () => {
 
     expect(errors).toEqual([]);
     expect(bundledProxy(stateDir).routes()).toEqual({ [svc.domain!]: [`${b}:80`] });
+  });
+
+  it('connects upstreams only to their own project proxy network, the proxy to each, and keeps routes added concurrently', async () => {
+    const p = proxy();
+    await p.ensure();
+    await Promise.all([p.addUpstreams(svcP1, [d]), p.addUpstreams(svcP2, [c])]);
+
+    expect(await proxyNetworks(d)).toEqual([projectNet(p1)]);
+    expect(await proxyNetworks(c)).toEqual([projectNet(p2)]);
+    expect(await proxyNetworks(b)).toEqual([projectNet(p1)]);
+    expect(await proxyNetworks(PROXY)).toEqual(expect.arrayContaining([projectNet(p1), projectNet(p2)]));
+
+    const expected = { [svc.domain!]: [`${b}:80`], [svcP1.domain!]: [`${d}:80`], [svcP2.domain!]: [`${c}:80`] };
+    expect(p.routes()).toEqual(expected);
+    expect(bundledProxy(stateDir).routes()).toEqual(expected);
+    await waitFor(async () => (await hit(svcP1.domain)).host === d, 60_000, 'p1 upstream d');
+    await waitFor(async () => (await hit(svcP2.domain)).host === c, 60_000, 'p2 upstream c');
   });
 });

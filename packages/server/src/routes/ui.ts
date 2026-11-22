@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import { i18n, isLang, negotiate, type I18n } from '@microrun/core/i18n';
+import { codePlain, i18n, isLang, negotiate, type I18n } from '@microrun/core/i18n';
 import { AgentError, type ResultCode, type ResultMap, type StorageConfig } from '@microrun/core/protocol';
 import type { DiffEntry } from '@microrun/core/schema';
 import { windowLeftMs } from '@microrun/core/state';
@@ -26,7 +26,9 @@ const list = (b: Body, k: string) => {
   return (Array.isArray(v) ? v : v === undefined ? [] : [v]).filter(Boolean);
 };
 const langOf = (req: FastifyRequest) => i18n(negotiate(req.cookies.mr_lang, req.headers['accept-language']));
-const oneLine = (h: Html) => h.__html.replace(/\r?\n/g, ' ');
+const LINE_BREAKS = /\r\n|[\r\n]/g;
+const oneLine = (h: Html) => h.__html.replace(LINE_BREAKS, ' ');
+const OPS_PER_ENV = 200;
 
 function sendHtml(reply: FastifyReply, h: Html | string, status = 200) {
   return reply
@@ -36,11 +38,19 @@ function sendHtml(reply: FastifyReply, h: Html | string, status = 200) {
 }
 
 function rejection(reply: FastifyReply, i: I18n, code: ResultCode, params: Record<string, string | number> = {}) {
+  reply.header('HX-Retarget', '#panel-alert').header('HX-Reswap', 'innerHTML');
   return sendHtml(reply, html`<div class="alert" role="alert">${codeText(i, code, params)}</div>`, statusFor(code));
 }
 
 type Started = { operationId: string } | { rejected: { code: ResultCode; params: Record<string, string | number> } };
-type EnvFormInput = { values: EnvFormValues; errors: Record<string, string>; isNew: boolean; deployToken?: string; bind?: { ok: boolean; text: string } };
+type EnvFormInput = {
+  values: EnvFormValues;
+  errors: Record<string, string>;
+  isNew: boolean;
+  deployToken?: string;
+  bind?: { ok: boolean; text: string };
+  rollingHint?: boolean;
+};
 
 const page = (req: FastifyRequest, reply: FastifyReply, title: string, active: 'envs' | 'history' | 'settings', body: Html, status = 200) =>
   sendHtml(reply, layout({ i: langOf(req), title, active, csrf: req.csrfToken, body }), status);
@@ -59,6 +69,12 @@ const storageTarget = (s: StorageConfig | null) =>
 function failNoteOf(last: OperationRow | undefined): ReleaseVM['failNote'] {
   if (!last || !last.code) return null;
   return last.status === 'failed' || last.status === 'rejected' ? { code: last.code, params: wire(last.params) } : null;
+}
+
+function cleanupFailedOf(ops: OperationRow[], r: ReleaseRow): ReleaseVM['cleanupFailed'] {
+  const last = ops.find((o) => o.kind === 'cleanup' && o.toReleaseId === r.id);
+  if (!last || last.status !== 'failed' || Array.isArray(r.cleanupPreview)) return null;
+  return { code: last.code ?? 'INVALID_REQUEST', params: wire(last.params) };
 }
 
 function releaseVM(env: EnvRow, r: ReleaseRow, rs: ReleaseRow[], ops: OperationRow[], now: number): ReleaseVM {
@@ -85,13 +101,18 @@ function releaseVM(env: EnvRow, r: ReleaseRow, rs: ReleaseRow[], ops: OperationR
     cleanupResult: cleanup ? (cleanup.cleanupResult as ReleaseVM['cleanupResult']) : null,
     activationSeq: r.activationSeq,
     imagePurged: r.imagePurgedAt !== null,
+    stored: r.stored,
+    cleanupFailed: cleanupFailedOf(ops, r),
   };
 }
 
 async function envVM(d: AppDeps, env: EnvRow, servers: ServerRow[], now: number): Promise<EnvVM> {
   const server = servers.find((s) => s.id === env.serverId);
   const rs = await d.repo.listReleases(env.id);
-  const ops = await d.repo.listOperations({ envId: env.id, limit: 1000 });
+  const recent = await d.repo.listOperations({ envId: env.id, limit: OPS_PER_ENV });
+  const missing = [...new Set(rs.flatMap((r) => (r.blockedByOp && !recent.some((o) => o.id === r.blockedByOp) ? [r.blockedByOp] : [])))];
+  const blockers = (await Promise.all(missing.map((id) => d.repo.getOperation(id)))).filter((o): o is OperationRow => !!o);
+  const ops = [...recent, ...blockers];
   return {
     id: env.id,
     name: env.name,
@@ -167,11 +188,20 @@ const serverRows = async (d: AppDeps) =>
   (await d.repo.listServers()).map((s) => ({ id: s.id, name: s.name, online: d.hub.isOnline(s.id), builtin: s.builtin, agentVersion: s.agentVersion, proxyMode: s.proxyMode }));
 
 const agentCommand = (d: AppDeps, token: string) =>
-  `npm i -g microrun && microrun agent --url ${d.config.publicUrl.href.replace(/\/$/, '')} --token ${token}`;
+  `npm i -g microrun && MICRORUN_AGENT_TOKEN=${token} microrun agent --url ${d.config.publicUrl.href.replace(/\/$/, '')}`;
 
-async function serversPage(d: AppDeps, req: FastifyRequest, reply: FastifyReply, created?: { name: string; token: string; command: string }) {
+const isProxyMode = (m: string): m is ServerRow['proxyMode'] => m === 'external' || m === 'bundled';
+
+async function serversPage(
+  d: AppDeps,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  created?: { name: string; token: string; command: string },
+  error?: string,
+  status = 200,
+) {
   const i = langOf(req);
-  return page(req, reply, i.t('settings.servers.title'), 'settings', serversView(i, await serverRows(d), req.csrfToken, created));
+  return page(req, reply, i.t('settings.servers.title'), 'settings', serversView(i, await serverRows(d), req.csrfToken, created, error), status);
 }
 
 function storageValues(s: StorageConfig | null): EnvFormValues {
@@ -233,7 +263,7 @@ type InspectedService = ResultMap['inspectEnv']['services'][number];
 
 function unfitForRolling(s: EnvFormParsed['services'][number], info: InspectedService | undefined, proxyMode: string | undefined): boolean {
   const proxied = proxyMode === 'bundled' && !!s.domain && !!s.port;
-  return !info || !info.hasHealthcheck || info.containerName !== null || (info.hostPorts.length > 0 && !proxied);
+  return !info || info.hasHealthcheck === false || info.containerName !== null || (info.hostPorts.length > 0 && !proxied);
 }
 
 async function inspect(d: AppDeps, v: EnvFormParsed) {
@@ -249,14 +279,23 @@ async function inspect(d: AppDeps, v: EnvFormParsed) {
   }
 }
 
-async function rollingErrors(d: AppDeps, v: EnvFormParsed): Promise<Record<string, string> | null> {
+async function rollingCheck(d: AppDeps, v: EnvFormParsed): Promise<{ errors: Record<string, string> | null; unknown: boolean }> {
   const rolling = v.services.filter((s) => s.strategy === 'rolling');
-  if (!rolling.length || !d.hub.isOnline(v.serverId)) return null;
+  if (!rolling.length || !d.hub.isOnline(v.serverId)) return { errors: null, unknown: false };
   const server = await d.repo.getServer(v.serverId);
   const res = await inspect(d, v);
-  if (!res) return null;
-  const bad = rolling.some((s) => unfitForRolling(s, res.services.find((x) => x.name === s.name), server?.proxyMode));
-  return bad ? { services: 'settings.h.services' } : null;
+  if (!res) return { errors: null, unknown: false };
+  const infos = rolling.map((s) => ({ s, info: res.services.find((x) => x.name === s.name) }));
+  const bad = infos.some(({ s, info }) => unfitForRolling(s, info, server?.proxyMode));
+  return { errors: bad ? { services: 'settings.h.services' } : null, unknown: infos.some(({ info }) => info?.hasHealthcheck === null) };
+}
+
+async function uniquenessErrors(d: AppDeps, v: EnvFormParsed, id: string | undefined): Promise<Record<string, string> | null> {
+  const others = (await d.repo.listEnvs()).filter((e) => e.id !== id);
+  const errors: Record<string, string> = {};
+  if (others.some((e) => e.name === v.name)) errors.name = 'settings.err.nameTaken';
+  if (others.some((e) => e.branch === v.branch)) errors.branch = 'settings.err.branchTaken';
+  return Object.keys(errors).length ? errors : null;
 }
 
 function keepSecrets(next: StorageConfig, old: StorageConfig | null): StorageConfig {
@@ -265,10 +304,22 @@ function keepSecrets(next: StorageConfig, old: StorageConfig | null): StorageCon
   return next;
 }
 
-function historyRow(o: OperationRow, envs: EnvRow[], shas: Map<string, string>): HistoryVM[] {
+type RuleCount = { rule: string; count: number };
+
+function cleanupRows(o: OperationRow, rel: ReleaseRow | undefined): HistoryVM['cleanup'] {
+  if (o.kind !== 'cleanup' || !Array.isArray(o.cleanupResult)) return undefined;
+  const preview = Array.isArray(rel?.cleanupPreview) ? (rel.cleanupPreview as RuleCount[]) : [];
+  return (o.cleanupResult as { rule: string; deleted: number }[]).map((x) => ({
+    rule: x.rule,
+    expected: preview.find((p) => p.rule === x.rule)?.count ?? 0,
+    deleted: x.deleted,
+  }));
+}
+
+function historyRow(o: OperationRow, envs: EnvRow[], rels: Map<string, ReleaseRow>): HistoryVM[] {
   const env = envs.find((e) => e.id === o.envId);
   if (!env) return [];
-  const sha = (id: string | null) => (id && shas.get(id)) || '—';
+  const sha = (id: string | null) => (id && rels.get(id)?.commitSha) || '—';
   return [{
     at: o.startedAt,
     env: env.name,
@@ -279,7 +330,8 @@ function historyRow(o: OperationRow, envs: EnvRow[], shas: Map<string, string>):
     actor: o.actor,
     status: o.status === 'succeeded' ? 'ok' : o.status,
     durationS: o.finishedAt === null ? null : seconds(o),
-    reason: o.code && o.status !== 'succeeded' ? { code: o.code, params: wire(o.params) } : null,
+    reason: o.code && (o.status !== 'succeeded' || o.code === 'CLEANUP_MISMATCH') ? { code: o.code, params: wire(o.params) } : null,
+    cleanup: cleanupRows(o, o.toReleaseId ? rels.get(o.toReleaseId) : undefined),
   }];
 }
 
@@ -307,9 +359,9 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const filter = req.query.env ?? '';
     const envs = await repo.listEnvs();
     const ops = await repo.listOperations({ envId: filter && filter !== 'all' ? filter : undefined, limit: 200 });
-    const shas = new Map<string, string>();
-    for (const e of envs) for (const r of await repo.listReleases(e.id)) shas.set(r.id, r.commitSha);
-    const rows = ops.filter(finished).flatMap((o) => historyRow(o, envs, shas));
+    const rels = new Map<string, ReleaseRow>();
+    for (const e of envs) for (const r of await repo.listReleases(e.id)) rels.set(r.id, r);
+    const rows = ops.filter(finished).flatMap((o) => historyRow(o, envs, rels));
     return page(req, reply, i.t('nav.history'), 'history', historyView(i, rows, envs.map((e) => ({ id: e.id, name: e.name })), filter));
   });
 
@@ -336,7 +388,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const steps = async (cur: OperationRow): Promise<Frame> => {
       const view = await progress(d, i, cur);
       const inner = /<ul class="steps" id="steps">([\s\S]*?)<\/ul>/.exec(view.__html)?.[1] ?? '';
-      return ['steps', inner.replace(/\r?\n/g, ' ')];
+      return ['steps', inner.replace(LINE_BREAKS, ' ')];
     };
     await streamOperation(reply, d, op.id, async (cur, ev) => {
       if (ev === null) return [finished(cur) ? await done(cur) : await steps(cur)];
@@ -376,7 +428,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
   app.post('/close-window', async (req, reply) => {
     const id = field(bodyOf(req), 'releaseId');
     if (!(await repo.getRelease(id))) return rejection(reply, langOf(req), 'INVALID_REQUEST');
-    await orchestrator.closeWindow(id);
+    const res = await orchestrator.closeWindow(id);
+    if ('rejected' in res) return rejection(reply, langOf(req), res.rejected.code, res.rejected.params);
     return panelOr404(d, req, reply, id);
   });
 
@@ -406,10 +459,12 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const b = bodyOf(req);
     const name = field(b, 'name');
     if (!name) return serversPage(d, req, reply);
+    const i = langOf(req);
+    if ((await repo.listServers()).some((s) => s.name === name)) return serversPage(d, req, reply, undefined, i.t('settings.err.serverTaken'), 422);
     const token = newToken();
     const server = await repo.createServer({ name, agentTokenHash: hashToken(token), builtin: false });
     const proxy = field(b, 'proxy_mode');
-    if (proxy === 'external' || proxy === 'bundled') await repo.updateServer(server.id, { proxyMode: proxy });
+    if (isProxyMode(proxy)) await repo.updateServer(server.id, { proxyMode: proxy });
     return serversPage(d, req, reply, { name, token, command: agentCommand(d, token) });
   });
 
@@ -418,7 +473,16 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (!server || server.builtin) return reply.code(404).send();
     const token = newToken();
     await repo.updateServer(server.id, { agentTokenHash: hashToken(token) });
+    d.hub.disconnect(server.id);
     return serversPage(d, req, reply, { name: server.name, token, command: agentCommand(d, token) });
+  });
+
+  app.post<{ Params: { id: string } }>('/settings/servers/:id/proxy', async (req, reply) => {
+    const server = await repo.getServer(req.params.id);
+    if (!server) return reply.code(404).send();
+    const mode = field(bodyOf(req), 'proxy_mode');
+    if (isProxyMode(mode)) await repo.updateServer(server.id, { proxyMode: mode });
+    return serversPage(d, req, reply);
   });
 
   app.get('/settings/env/new', async (req, reply) => envForm(d, req, reply, { values: {}, errors: {}, isNew: true }));
@@ -437,8 +501,10 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const values = bodyValues(b);
     const parsed = parseEnvForm(b);
     if (!parsed.ok) return envForm(d, req, reply, { values, errors: parsed.errors, isNew: !existing }, 422);
-    const errors = await rollingErrors(d, parsed.value);
-    if (errors) return envForm(d, req, reply, { values, errors, isNew: !existing }, 422);
+    const taken = await uniquenessErrors(d, parsed.value, existing?.id);
+    if (taken) return envForm(d, req, reply, { values, errors: taken, isNew: !existing }, 422);
+    const rolling = await rollingCheck(d, parsed.value);
+    if (rolling.errors) return envForm(d, req, reply, { values, errors: rolling.errors, isNew: !existing }, 422);
     const { storageConfig, ...rest } = parsed.value;
     const storage = keepSecrets(storageConfig, existing ? readStorage(d, existing) : null);
     const token = existing ? undefined : newToken();
@@ -448,7 +514,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
       deployTokenHash: existing ? existing.deployTokenHash : hashToken(token!),
       ...(existing ? { id: existing.id } : {}),
     });
-    return envForm(d, req, reply, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token });
+    return envForm(d, req, reply, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown });
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/bind', async (req, reply) => {
@@ -457,8 +523,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const i = langOf(req);
     const res = await orchestrator.bindDatabase(env.id);
     const text = res.ok
-      ? `${i.t('settings.env.bind')}: ${i.t('common.yes')}`
-      : codeText(i, res.code, { env: env.name, svc: env.migrationService, ...res.params }).__html;
+      ? `${i.text('settings.env.bind')}: ${i.text('common.yes')}`
+      : codePlain(i, res.code, { env: env.name, svc: env.migrationService, ...res.params });
     return envForm(d, req, reply, { values: toValues(d, (await repo.getEnv(env.id))!), errors: {}, isNew: false, bind: { ok: res.ok, text } });
   });
 

@@ -770,3 +770,213 @@ describe('Orchestrator bindDatabase', () => {
     expect((await env()).dbMarkerId).toBeNull();
   });
 });
+
+describe('Orchestrator migration tables', () => {
+  const withMeta = (s: SchemaSnapshot): SchemaSnapshot =>
+    s.kind === 'sql' ? { ...s, tables: [...s.tables, table('django_migrations')] } : s;
+
+  beforeEach(async () => {
+    await setEnv({ migrationTables: ['django_migrations'] });
+    agent.handlers.snapshotSchema = () => ({ snapshot: withMeta(agent.live) });
+  });
+
+  it('leaves the env migration_tables out of the baseline, so a dry_run deploy is not destructive', async () => {
+    const op = await deploy(A);
+    expect(op).toMatchObject({ status: 'succeeded', code: null });
+    const r = (await rel(A))!;
+    expect(r.schemaSnapshot).toEqual(SCHEMAS[A]);
+    expect(r.schemaDiff).toEqual(diffSchema(S0, SCHEMAS[A]!));
+  });
+
+  it('leaves the env migration_tables out of the stored after-expand snapshot under post_check', async () => {
+    await setEnv({ migrationTables: ['django_migrations'], schemaCheck: 'post_check' });
+    await deploy(A);
+    const op = await deploy(B);
+    expect(op.status).toBe('succeeded');
+    expect((await rel(A))!.schemaSnapshot).toEqual(SCHEMAS[A]);
+    expect((await rel(B))!.schemaDiff).toEqual(diffSchema(SCHEMAS[A]!, SCHEMAS[B]!));
+  });
+});
+
+describe('Orchestrator resume after activate', () => {
+  async function interruptedAtStore(sha: string) {
+    agent.handlers.storeImages = () => new Promise(() => {});
+    const res = await request(sha);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    const opId = res.operationId;
+    await vi.waitFor(() => {
+      if (!agent.cmds(opId, 'storeImages').length) throw new Error('store not reached');
+    });
+    return opId;
+  }
+
+  async function resume(opId: string) {
+    const restarted = new FakeAgent();
+    restarted.live = agent.live;
+    await mkOrch(restarted).resumeAll();
+    return { op: await settle(opId), restarted };
+  }
+
+  it('records the reactivate decision and resumes a reactivation with only the store step', async () => {
+    await deploy(A);
+    await deploy(B);
+    const opId = await interruptedAtStore(A);
+    const stepsDone = (await repo.getOperation(opId))!.stepsDone;
+    expect(stepsDone.plan).toEqual({ reactivate: true });
+    expect(stepsDone).toHaveProperty('activate');
+
+    const { op, restarted } = await resume(opId);
+    expect(op.status).toBe('succeeded');
+    expect(restarted.steps(opId)).toEqual(['store']);
+    expect(await rel(A)).toMatchObject({ state: 'active', activationSeq: 3, schemaSnapshot: SCHEMAS[A], stored: true });
+    expect(await rel(B)).toMatchObject({ state: 'available' });
+  });
+
+  it('resumes a new release over an active one with only the store step', async () => {
+    await deploy(A);
+    const opId = await interruptedAtStore(B);
+    expect((await repo.getOperation(opId))!.stepsDone.plan).toEqual({ reactivate: false });
+
+    const { op, restarted } = await resume(opId);
+    expect(op.status).toBe('succeeded');
+    expect(restarted.steps(opId)).toEqual(['store']);
+    expect(await rel(B)).toMatchObject({ state: 'active', activationSeq: 2, schemaSnapshot: SCHEMAS[B] });
+    expect((await rel(B))!.schemaDiff).toEqual(diffSchema(SCHEMAS[A]!, SCHEMAS[B]!));
+  });
+});
+
+describe('Orchestrator agent failures', () => {
+  it('fails with AGENT_ERROR {reason} when the agent port throws a plain error', async () => {
+    agent.handlers.pullImages = () => {
+      throw new Error('socket hang up');
+    };
+    const op = await deploy(A);
+    expect(op).toMatchObject({ status: 'failed', code: 'AGENT_ERROR', params: expect.objectContaining({ reason: 'socket hang up' }) });
+    expect(events.filter((e) => e.opId === op.id).at(-1)?.ev).toEqual({
+      type: 'done', status: 'failed', code: 'AGENT_ERROR', message: 'The agent failed: socket hang up',
+      params: expect.objectContaining({ reason: 'socket hang up' }),
+    });
+    expect(await rel(A)).toMatchObject({ state: 'failed' });
+  });
+
+  it('keeps the last 8000 characters of a failed expand log in the operation log', async () => {
+    const tail = `${'x'.repeat(7990)}END-OF-LOG`;
+    agent.handlers.runCommand = (cmd) =>
+      cmd.cmd === 'npm run migrate' ? { exitCode: 2, stdout: '', log: `HEAD-OF-LOG${'y'.repeat(5000)}${tail}` } : agent.fallback(cmd);
+    const op = await deploy(A);
+    expect(op).toMatchObject({ status: 'failed', code: 'MIGRATION_FAILED' });
+    expect(op.log).toContain(tail);
+    expect(op.log).not.toContain('HEAD-OF-LOG');
+  });
+
+  it('sets stored=0 on a reactivated release whose store fails and keeps the deploy succeeded', async () => {
+    await deploy(A);
+    await deploy(B);
+    expect((await rel(A))!.stored).toBe(true);
+    agent.handlers.storeImages = () => {
+      throw new AgentError('STORAGE_FAILED', { reason: 'disk full' });
+    };
+    const op = await deploy(A);
+    expect(op).toMatchObject({ status: 'succeeded', code: null });
+    expect(op.log).toContain('STORAGE_FAILED');
+    expect(await rel(A)).toMatchObject({ state: 'active', stored: false });
+  });
+});
+
+describe('Orchestrator plain-text messages', () => {
+  it('answers a rejected deploy with the params unescaped', async () => {
+    const res = await request(A, { branch: "fix/o'neil&co" });
+    expect(res).toMatchObject({ rejected: { code: 'BRANCH_MISMATCH', message: expect.stringContaining("fix/o'neil&co") } });
+  });
+
+  it('emits the done message with the params unescaped', async () => {
+    agent.markerFor.worker = { envId: '33333333-3333-4333-8333-333333333333', envName: "qa & o'neil" };
+    const op = await deploy(A);
+    const done = events.filter((e) => e.opId === op.id).at(-1)!.ev as Extract<OperationEvent, { type: 'done' }>;
+    expect(done).toMatchObject({ code: 'DB_MARKER_MISMATCH' });
+    expect(done.message).toContain("qa & o'neil");
+  });
+});
+
+describe('Orchestrator rollback digests', () => {
+  it('sends the recorded digest of every service with fetchImages', async () => {
+    await deploy(A);
+    await deploy(B);
+    const relA = (await rel(A))!;
+    const op = await rollback(A);
+    const fetch = agent.cmds(op.id, 'fetchImages')[0]!;
+    expect(fetch.digests).toEqual({ web: relA.images.web!.digest, worker: relA.images.worker!.digest });
+    expect(fetch.digests!.web).toMatch(/^sha256:/);
+  });
+});
+
+describe('Orchestrator runContract', () => {
+  it('runs contract_cmd from the digest-pinned release image with MICRORUN_* env and stamps contracted_at', async () => {
+    await deploy(A);
+    const relA = (await rel(A))!;
+    now += 1000;
+    await orch.runContract(relA.id);
+    const op = (await ops()).find((o) => o.kind === 'contract')!;
+    expect(op).toMatchObject({ status: 'succeeded', actor: 'system', toReleaseId: relA.id });
+    const cmd = agent.cmds(op.id, 'runCommand')[0]!;
+    expect(cmd).toMatchObject({ service: 'web', cmd: 'npm run contract', args: [] });
+    expect(cmd.image).toBe(`reg/web:${A}@${relA.images.web!.digest}`);
+    expect(cmd.env).toMatchObject({
+      MICRORUN_ENV: 'prod', MICRORUN_RELEASE_COMMIT: A, MICRORUN_DEPLOYED_AT: new Date(relA.deployedAt).toISOString(),
+    });
+    expect(await rel(A)).toMatchObject({ contractedAt: now });
+  });
+
+  it('fails with CONTRACT_FAILED and keeps the command log', async () => {
+    await deploy(A);
+    agent.handlers.runCommand = (cmd) =>
+      cmd.cmd === 'npm run contract' ? { exitCode: 3, stdout: '', log: 'contract: column still in use' } : agent.fallback(cmd);
+    now += 1000;
+    await orch.runContract((await rel(A))!.id);
+    const op = (await ops()).find((o) => o.kind === 'contract')!;
+    expect(op).toMatchObject({ status: 'failed', code: 'CONTRACT_FAILED' });
+    expect(op.log).toContain('contract: column still in use');
+    expect(await rel(A)).toMatchObject({ contractedAt: null });
+  });
+});
+
+describe('Orchestrator approveDestructive', () => {
+  it('records the approval as a succeeded approve operation by admin', async () => {
+    await deploy(A);
+    await deploy(D);
+    now += 1000;
+    await orch.approveDestructive(envId, D);
+    const relD = (await rel(D))!;
+    expect((await ops()).filter((o) => o.kind === 'approve')).toEqual([
+      expect.objectContaining({ status: 'succeeded', actor: 'admin', toReleaseId: relD.id, params: expect.objectContaining({ commit: D }) }),
+    ]);
+  });
+});
+
+describe('Orchestrator closeWindow', () => {
+  it.each([
+    ['with', 'npm run contract', A],
+    ['without', null, B],
+  ])('answers ENV_BUSY %s contract_cmd and expires nothing while the env is busy', async (_, contractCmd, closed) => {
+    await setEnv({ contractCmd });
+    await deploy(A);
+    await deploy(B);
+    await repo.createOperation({
+      envId, kind: 'deploy', fromReleaseId: null, toReleaseId: null, actor: 'admin', status: 'running', startedAt: now,
+    });
+    const before = await repo.listReleases(envId);
+    await expect(orch.closeWindow((await rel(closed))!.id)).resolves.toMatchObject({ rejected: { code: 'ENV_BUSY' } });
+    expect(await repo.listReleases(envId)).toEqual(before);
+  });
+
+  it('closes the window without contract_cmd through a succeeded expire operation', async () => {
+    await setEnv({ contractCmd: null });
+    await deploy(A);
+    await deploy(B);
+    const res = await orch.closeWindow((await rel(B))!.id);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    expect(await settle(res.operationId)).toMatchObject({ kind: 'expire', status: 'succeeded', actor: 'admin' });
+    expect(await rel(A)).toMatchObject({ state: 'expired' });
+    expect(await rel(B)).toMatchObject({ state: 'active' });
+  });
+});

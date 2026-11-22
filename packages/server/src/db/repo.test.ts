@@ -97,6 +97,14 @@ describe('Repo', () => {
     await expect(repo.createOperation(newOperation(other.id))).resolves.toMatchObject({ envId: other.id });
   });
 
+  it('stores a succeeded approve operation next to a running one', async () => {
+    const s = await mkServer();
+    const env = await mkEnv(s.id, 'staging', 'develop');
+    await repo.createOperation(newOperation(env.id, 'running'));
+    const op = await repo.createOperation({ ...newOperation(env.id), kind: 'approve', status: 'succeeded', params: { commit: 'abc1234' } });
+    expect(await repo.getOperation(op.id)).toMatchObject({ kind: 'approve', status: 'succeeded', params: { commit: 'abc1234' } });
+  });
+
   it('rejects an env with a duplicate branch', async () => {
     const s = await mkServer();
     await mkEnv(s.id, 'staging', 'develop');

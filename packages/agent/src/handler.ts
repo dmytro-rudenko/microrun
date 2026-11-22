@@ -105,10 +105,9 @@ async function pullImages(run: DockerRun, refs: string[]): Promise<Record<string
   };
   const out: Record<string, string> = {};
   for (const ref of refs) {
-    let digest = await inspect(ref);
+    let digest = ref.includes('@sha256:') ? await inspect(ref) : null;
     if (digest === null) {
-      const p = await run(['pull', ref]);
-      if (p.code !== 0) throw new AgentError('IMAGE_PULL_FAILED', { image: ref });
+      await run(['pull', ref]);
       digest = await inspect(ref);
       if (digest === null) throw new AgentError('IMAGE_PULL_FAILED', { image: ref });
     }
@@ -119,14 +118,19 @@ async function pullImages(run: DockerRun, refs: string[]): Promise<Record<string
 
 const pingResult = (w: string | null) => (w ? { agentVersion: AGENT_VERSION, warning: w } : { agentVersion: AGENT_VERSION });
 
-async function proxyFor(L: Layers, stateDir: string, mode: 'external' | 'bundled'): Promise<ProxyHook | null> {
-  if (mode !== 'bundled') return null;
-  const p = L.bundledProxy(stateDir);
-  await p.ensure();
-  return p;
+type ProxyFor = (mode: 'external' | 'bundled') => Promise<ProxyHook | null>;
+
+function proxyCache(L: Layers, stateDir: string): ProxyFor {
+  let proxy: ReturnType<Layers['bundledProxy']> | null = null;
+  return async (mode) => {
+    if (mode !== 'bundled') return null;
+    proxy ??= L.bundledProxy(stateDir);
+    await proxy.ensure();
+    return proxy;
+  };
 }
 
-async function dispatch(L: Layers, run: DockerRun, stateDir: string, warning: Promise<string | null>, cmd: Command): Promise<unknown> {
+async function dispatch(L: Layers, run: DockerRun, proxyFor: ProxyFor, warning: Promise<string | null>, cmd: Command): Promise<unknown> {
   switch (cmd.type) {
     case 'ping': return pingResult(await warning);
     case 'inspectEnv': return L.inspectEnv(cmd.compose, cmd.dbUrlEnv);
@@ -140,13 +144,13 @@ async function dispatch(L: Layers, run: DockerRun, stateDir: string, warning: Pr
       return L.dryRunExpand(cmd.db, { image: cmd.image, cmd: cmd.cmd, migrationTables: cmd.migrationTables, opId: cmd.opId, env: cmd.env });
     case 'runCommand':
       return L.runOneOff(cmd.compose, { service: cmd.service, image: cmd.image, cmd: cmd.cmd, args: cmd.args, env: cmd.env });
-    case 'switchServices': return L.switchServices(cmd.compose, cmd.services, cmd.healthTimeoutS, await proxyFor(L, stateDir, cmd.proxyMode));
+    case 'switchServices': return L.switchServices(cmd.compose, cmd.services, cmd.healthTimeoutS, await proxyFor(cmd.proxyMode));
     case 'storeImages':
-      await L.storeImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
       await L.pinImages(cmd.env, cmd.sha, cmd.images);
+      await L.storeImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
       return {};
     case 'fetchImages':
-      await L.fetchImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
+      await L.fetchImages(cmd.storage, cmd.env, cmd.sha, cmd.images, cmd.digests);
       return {};
     case 'deleteImages':
       await L.deleteImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
@@ -166,6 +170,7 @@ export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?
   const saveResults = serial();
   const saveDirs = serial();
   const warning = composeWarning(run);
+  const proxyFor = proxyCache(L, d.stateDir);
   const ready = Promise.all([warning, sweep([...dirs]).catch(() => {})]);
 
   async function perform(id: string, cmd: Command): Promise<unknown> {
@@ -178,7 +183,7 @@ export function createHandler(d: { stateDir: string; docker?: DockerRun; layers?
         await saveDirs(() => writeAtomic(dirsFile, [...dirs]));
       }
     }
-    const result = await dispatch(L, run, d.stateDir, warning, cmd);
+    const result = await dispatch(L, run, proxyFor, warning, cmd);
     if (cmd.type !== 'ping') {
       cache.delete(id);
       cache.set(id, result);

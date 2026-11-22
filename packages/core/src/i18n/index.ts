@@ -63,6 +63,7 @@ const esc = (v: string | number) => String(v).replace(/[&<>"']/g, (c) => ESCAPES
 export interface I18n {
   lang: Lang;
   t(key: string, params?: Record<string, string | number>): string;
+  text(key: string, params?: Record<string, string | number>): string;
   num(n: number): string;
   unit(n: number, u: 'second' | 'minute' | 'hour' | 'day'): string;
   date(ts: number): string;
@@ -77,14 +78,16 @@ export function i18n(lang: Lang): I18n {
   const unit = (n: number, u: 'second' | 'minute' | 'hour' | 'day') =>
     new Intl.NumberFormat(lang, { style: 'unit', unit: u, unitDisplay: 'long' }).format(n);
 
-  const t = (key: string, params: Record<string, string | number> = {}) => {
+  const render = (escape: (v: string | number) => string) => (key: string, params: Record<string, string | number> = {}) => {
     let msg = merged[lang][key] ?? merged.en[key] ?? key;
     if (typeof msg === 'object') msg = (msg as Record<string, string | undefined>)[plural.select(Number(params.n))] ?? msg.other;
     return msg.replace(/\{(\w+)\}/g, (_, k: string) => {
       const v = params[k];
-      return esc(k === 'n' && typeof v === 'number' ? num(v) : (v ?? ''));
+      return escape(k === 'n' && typeof v === 'number' ? num(v) : (v ?? ''));
     });
   };
+  const t = render(esc);
+  const text = render(String);
 
   const date = (ts: number) =>
     new Intl.DateTimeFormat(lang, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'UTC' }).format(ts);
@@ -105,12 +108,18 @@ export function i18n(lang: Lang): I18n {
     return h ? `${unit(d, 'day')} ${unit(h, 'hour')}` : unit(d, 'day');
   };
 
-  return { lang, t, num, unit, date, ago, left };
+  return { lang, t, text, num, unit, date, ago, left };
 }
 
+const codeParams = (i: I18n, params: Record<string, string | number>) =>
+  typeof params.at === 'number' ? { ...params, at: i.date(params.at) } : params;
+
 export function codeMessage(i: I18n, code: string, params: Record<string, string | number> = {}): string {
-  const p = typeof params.at === 'number' ? { ...params, at: i.date(params.at) } : params;
-  return i.t(`codes.${code}`, p);
+  return i.t(`codes.${code}`, codeParams(i, params));
+}
+
+export function codePlain(i: I18n, code: string, params: Record<string, string | number> = {}): string {
+  return i.text(`codes.${code}`, codeParams(i, params));
 }
 
 export function allKeys(): Record<Lang, string[]> {

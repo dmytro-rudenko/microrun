@@ -92,6 +92,7 @@ export async function runOneOff(
   const envFile = join(c.dir, `.microrun-env-${id}`);
   const name = `microrun-run-${id}`;
   const hasEnv = Object.keys(p.env).length > 0;
+  const redact = secretValues({ ...serviceEnv(await composeConfig(c), p.service), ...p.env });
   try {
     await writeFile(tmp, overrideYaml({ [p.service]: p.image }));
     if (hasEnv) {
@@ -102,7 +103,7 @@ export async function runOneOff(
       '-f', tmp, 'run', '--rm', '--no-deps', '-T', '--name', name,
       ...(hasEnv ? ['--env-from-file', envFile] : []),
       p.service, '/bin/sh', '-c', `${p.cmd} "$@"`, 'sh', ...p.args,
-    ]), { redact: secretValues(p.env), timeoutMs: p.timeoutMs ?? RUN_TIMEOUT_MS });
+    ]), { redact, timeoutMs: p.timeoutMs ?? RUN_TIMEOUT_MS });
     if (r.timedOut) {
       await docker(['rm', '-f', name]);
       throw new AgentError('MIGRATION_FAILED', { reason: 'timeout', cmd: p.cmd.trim().split(/\s+/)[0] ?? '' });
@@ -118,13 +119,13 @@ function healthTest(test: string[] | string | null | undefined): string[] {
   return Array.isArray(test) ? test : test ? [test] : [];
 }
 
-export async function hasHealthcheck(s: ComposeService, image: string | null | undefined = s.image): Promise<boolean> {
+export async function hasHealthcheck(s: ComposeService, image: string | null | undefined = s.image): Promise<boolean | null> {
   if (s.healthcheck?.disable) return false;
   const own = healthTest(s.healthcheck?.test);
   if (own.length > 0) return own[0] !== 'NONE';
   if (!image) return false;
   const r = await docker(['image', 'inspect', '--format', '{{json .Config.Healthcheck}}', image]);
-  if (r.code !== 0) return false;
+  if (r.code !== 0) return null;
   const test = healthTest((JSON.parse(r.stdout.trim() || 'null') as { Test?: string[] } | null)?.Test);
   return test.length > 0 && test[0] !== 'NONE';
 }

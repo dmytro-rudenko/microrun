@@ -6,6 +6,7 @@ export interface Config {
   dataDir: string;
   port: number;
   secureCookies: boolean;
+  trustProxy?: string | false;
 }
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -33,5 +34,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     dataDir: env.MICRORUN_DATA_DIR || '/data',
     port,
     secureCookies: publicUrl.protocol === 'https:',
+    trustProxy: env.MICRORUN_TRUST_PROXY || false,
   };
 }

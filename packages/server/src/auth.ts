@@ -3,6 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import formbody from '@fastify/formbody';
 import rateLimit from '@fastify/rate-limit';
+import { negotiate } from '@microrun/core/i18n';
 import type { Config } from './config.ts';
 import { hashToken, newToken } from './crypto.ts';
 import type { Repo } from './db/repo.ts';
@@ -91,12 +92,21 @@ export function registerAuth(app: FastifyInstance, deps: AuthDeps): void {
   app.decorate('requireAdmin', requireAdmin);
 
   const page = (reply: FastifyReply, status: number, error: boolean, req: FastifyRequest) =>
-    reply.code(status).type('text/html; charset=utf-8').send(render({ error, csrf: req.csrfToken || undefined }));
+    reply
+      .code(status)
+      .type('text/html; charset=utf-8')
+      .send(render({ error, csrf: req.csrfToken || undefined, lang: negotiate(req.cookies.mr_lang, req.headers['accept-language']) }));
 
   app.register(async (s) => {
     s.get('/login', async (req, reply) => page(reply, 200, false, req));
 
-    s.post('/login', { config: { rateLimit: { max: 5, timeWindow: 60_000 } } }, async (req, reply) => {
+    const loginLimit = {
+      max: 5,
+      timeWindow: 60_000,
+      hook: 'preHandler' as const,
+      keyGenerator: (req: FastifyRequest) => `${req.ip}\n${(field(req.body, 'username') ?? '').toLowerCase()}`,
+    };
+    s.post('/login', { config: { rateLimit: loginLimit } }, async (req, reply) => {
       const user = field(req.body, 'username') ?? '';
       const pass = field(req.body, 'password') ?? '';
       const userOk = sameString(user, config.adminUser);

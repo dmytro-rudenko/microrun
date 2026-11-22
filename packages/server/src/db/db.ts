@@ -1,8 +1,9 @@
 import knex from 'knex';
 import type { Knex } from 'knex';
 import * as init from './migrations/001_init.ts';
+import * as approveKind from './migrations/002_approve_kind.ts';
 
-const migrations: Record<string, Knex.Migration> = { '001_init': init };
+const migrations: Record<string, Knex.Migration> = { '001_init': init, '002_approve_kind': approveKind };
 
 const migrationSource: Knex.MigrationSource<string> = {
   getMigrations: async () => Object.keys(migrations),

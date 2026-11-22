@@ -209,6 +209,40 @@ describe('parseEnvForm', () => {
     });
   });
 
+  describe('consistency rules', () => {
+    const localized = (key: string) => {
+      for (const lang of LANGS) expect(i18n(lang).t(key), `${lang}: ${key}`).not.toBe(key);
+    };
+
+    test('a migration_service that is not one of the services is rejected', () => {
+      const errors = failed({ migration_service: 'api' });
+      expect(Object.keys(errors)).toEqual(['migration_service']);
+      expect(errors.migration_service).not.toBe('settings.err.required');
+      localized(errors.migration_service!);
+      expect(parsed({ migration_service: 'worker' }).migrationService).toBe('worker');
+    });
+
+    test('a health_timeout_s under 5 seconds is rejected and 5 is accepted', () => {
+      const errors = failed({ health_timeout_s: '4' });
+      expect(Object.keys(errors)).toEqual(['health_timeout_s']);
+      expect(errors.health_timeout_s).not.toBe('settings.err.number');
+      localized(errors.health_timeout_s!);
+      expect(failed({ health_timeout_s: '0' })).toHaveProperty('health_timeout_s');
+      expect(parsed({ health_timeout_s: '5' }).healthTimeoutS).toBe(5);
+    });
+
+    test.each(['Staging', 'my_env', '-stage', 'stage.eu', 'stage env', 'ü', 'a'.repeat(64)])('the env name %s is not a lowercase slug and is rejected', (name) => {
+      const errors = failed({ name });
+      expect(Object.keys(errors)).toEqual(['name']);
+      expect(errors.name).not.toBe('settings.err.required');
+      localized(errors.name!);
+    });
+
+    test.each(['stage', 'stage-2', '2-eu', 'a', 'a'.repeat(63)])('the env name %s is a valid slug', (name) => {
+      expect(parsed({ name }).name).toBe(name);
+    });
+  });
+
   describe('defaults and required fields', () => {
     test('an empty position and health_timeout_s fall back to 0 and 120', () => {
       expect(parsed({ position: '', health_timeout_s: '' })).toMatchObject({ position: 0, healthTimeoutS: 120 });
@@ -346,14 +380,14 @@ describe('serversView', () => {
   const created = {
     name: 'edge-2',
     token: 'tok_abc123',
-    command: 'npm i -g microrun && microrun agent --url https://hub:3000 --token tok_abc123',
+    command: 'npm i -g microrun && MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
   };
 
   test('shows the new agent token and install command when a server was just created', () => {
     const out = serversView(en, servers, 'csrf-1', created).__html;
     expect(textOf(out, 'agent-token')).toContain('tok_abc123');
     expect(textOf(out, 'agent-command')).toContain(
-      'npm i -g microrun &amp;&amp; microrun agent --url https://hub:3000 --token tok_abc123',
+      'npm i -g microrun &amp;&amp; MICRORUN_AGENT_TOKEN=tok_abc123 microrun agent --url https://hub:3000',
     );
   });
 
@@ -383,6 +417,21 @@ describe('serversView', () => {
     expect(out).toContain('1.2.0');
     expect(out).toContain('bundled');
     expect(out).not.toContain('null');
+  });
+
+  test('every server row, the builtin one included, has a proxy_mode form posting to its own proxy route', () => {
+    const out = serversView(en, servers, 'csrf-1').__html;
+    for (const s of servers) {
+      const row = out.slice(out.indexOf(`data-testid="server-row-${s.name}"`));
+      const formAt = row.indexOf(`<form method="post" action="/settings/servers/${s.id}/proxy"`);
+      expect(formAt, s.name).toBeGreaterThanOrEqual(0);
+      const form = row.slice(formAt, row.indexOf('</form>', formAt));
+      expect(form).toContain('name="_csrf" value="csrf-1"');
+      expect(form).toMatch(/<select name="proxy_mode"/);
+      expect(form).toMatch(new RegExp(`<option value="${s.proxyMode}"[^>]*selected`));
+      expect(form).toMatch(/<option value="external"/);
+      expect(form).toMatch(/<option value="bundled"/);
+    }
   });
 
   test('escapes server names', () => {

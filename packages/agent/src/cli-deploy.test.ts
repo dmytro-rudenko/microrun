@@ -248,12 +248,42 @@ describe('runDeploy event stream', () => {
     expect(h.text()).toContain('agent crashed unexpectedly');
   });
 
-  it('returns 3 with a line naming the operation when the stream closes before done', async () => {
-    const h = harness([accepted('op-77'), sse([{ type: 'step', step: 'pull', status: 'running' }])]);
+  it('reconnects to the same events URL when the stream ends before done and returns the replayed result', async () => {
+    const h = harness([
+      accepted('op-9'),
+      sse([{ type: 'step', step: 'pull', status: 'running' }]),
+      rawSse(`: keepalive\n\n${frame({ type: 'step', step: 'pull', status: 'running' })}${frame(done('succeeded'))}`),
+    ]);
+    const code = await runDeploy(baseArgs, {}, h.deps);
+    expect(code).toBe(0);
+    expect(h.calls.map((c) => c.url)).toEqual([
+      `${URL_BASE}/api/v1/deploy`,
+      `${URL_BASE}/api/v1/operations/op-9/events`,
+      `${URL_BASE}/api/v1/operations/op-9/events`,
+    ]);
+    expect(header(h.calls[2]!, 'authorization')).toBe('Bearer tok-1');
+    expect(header(h.calls[2]!, 'accept')).toBe('text/event-stream');
+    expect(h.sleeps).toEqual([1000]);
+    expect(h.text()).not.toContain('op-9');
+  });
+
+  it('returns 3 with a line naming the operation after 5 reconnects with backoff 1, 2, 4, 8, 16 s', async () => {
+    const closed = () => rawSse(': keepalive\n\n');
+    const h = harness([accepted('op-77'), sse([{ type: 'step', step: 'pull', status: 'running' }]), ...Array.from({ length: 5 }, closed)]);
     const code = await runDeploy(baseArgs, {}, h.deps);
     expect(code).toBe(3);
-    expect(h.text()).toContain('op-77');
+    expect(h.calls).toHaveLength(7);
+    expect(h.calls.slice(1).every((c) => c.url === `${URL_BASE}/api/v1/operations/op-77/events`)).toBe(true);
+    expect(h.sleeps).toEqual([1000, 2000, 4000, 8000, 16000]);
+    expect(h.text()).toContain(i18n('en').t('cli.streamClosed', { op: 'op-77' }));
     expect(h.text()).not.toContain(i18n('en').t('cli.unreachable'));
+  });
+
+  it('prints a done message with quotes and ampersands verbatim', async () => {
+    const h = harness([accepted(), sse([done('failed', 'MIGRATION_FAILED', "can't migrate \"users\" & <orders>")])]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(1);
+    expect(h.text()).toContain(`MIGRATION_FAILED: can't migrate "users" & <orders>`);
+    expect(h.text()).not.toMatch(/&(amp|#39|#x27|quot|lt|gt);/);
   });
 
   it.each(REJECT_CODES)('returns 2 for a done event with reject code %s', async (rejectCode) => {
@@ -293,6 +323,12 @@ describe('runDeploy server answers', () => {
     const code = await runDeploy(baseArgs, {}, h.deps);
     expect(code).toBe(0);
     expect(h.calls).toHaveLength(1);
+  });
+
+  it('prints an API error message with quotes and ampersands verbatim', async () => {
+    const h = harness([json(422, { code: 'BRANCH_MISMATCH', message: "branch 'dev' & 'main' differ", params: {} })]);
+    expect(await runDeploy(baseArgs, {}, h.deps)).toBe(2);
+    expect(h.text()).toContain("BRANCH_MISMATCH: branch 'dev' & 'main' differ");
   });
 
   it('returns 3 and prints the message on 401', async () => {

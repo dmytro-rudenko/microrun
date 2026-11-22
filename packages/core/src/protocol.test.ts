@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, expect, expectTypeOf } from 'vitest';
 import {
   PROTOCOL_VERSION,
   RESULT_CODES,
@@ -10,7 +10,7 @@ import {
   deployRequest,
   parseCleanupLines,
 } from './protocol.ts';
-import type { Command, ComposeRef, DbRef, StorageConfig } from './protocol.ts';
+import type { Command, ComposeRef, DbRef, ResultMap, StorageConfig } from './protocol.ts';
 
 const compose: ComposeRef = { project: 'shop', dir: '/srv/shop', files: ['docker-compose.yml', 'docker-compose.microrun.yml'] };
 const db: DbRef = { compose, service: 'db', dbKind: 'postgres', dbUrlEnv: 'DATABASE_URL' };
@@ -48,6 +48,7 @@ const commands: Command[] = [
   },
   { type: 'storeImages', storage: local, env: 'staging', sha: 'abc1234', images },
   { type: 'fetchImages', storage: registry, env: 'staging', sha: 'abc1234', images },
+  { type: 'fetchImages', storage: local, env: 'staging', sha: 'abc1234', images, digests: { web: 'sha256:aa', worker: 'sha256:bb' } },
   { type: 'deleteImages', storage: s3, env: 'staging', sha: 'abc1234', images },
 ];
 
@@ -59,11 +60,25 @@ describe('constants', () => {
   test('every reject code is a result code', () => {
     for (const code of REJECT_CODES) expect(RESULT_CODES).toContain(code);
   });
+
+  test('AGENT_ERROR is a result code that fails rather than rejects', () => {
+    expect(RESULT_CODES).toContain('AGENT_ERROR');
+    expect(REJECT_CODES).not.toContain('AGENT_ERROR');
+  });
+
+  test('inspectEnv reports hasHealthcheck as boolean or null', () => {
+    expectTypeOf<ResultMap['inspectEnv']['services'][number]['hasHealthcheck']>().toEqualTypeOf<boolean | null>();
+  });
 });
 
 describe('commandSchema', () => {
   test.each(commands.map((c) => [c.type, c] as const))('accepts %s', (_type, cmd) => {
     expect(commandSchema.parse(cmd)).toEqual(cmd);
+  });
+
+  test('rejects a fetchImages command with a non-string digest', () => {
+    const cmd = { type: 'fetchImages', storage: local, env: 'staging', sha: 'abc1234', images, digests: { web: 1 } };
+    expect(commandSchema.safeParse(cmd).success).toBe(false);
   });
 
   test('rejects an unknown type', () => {

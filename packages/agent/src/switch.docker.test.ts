@@ -339,7 +339,7 @@ describe('switchServices (real Docker)', () => {
     expect((await appContainers()).map((c) => c.id).sort()).toEqual(before);
   });
 
-  it('calls addUpstreams with the new container names before stopping the old ones, removeUpstreams after with the old names', async () => {
+  it('calls addUpstreams with the new names and removeUpstreams with the old names, both before stopping the old ones', async () => {
     const a = await imageId(images.a);
     const old = await appContainers();
     expect(old).toHaveLength(2);
@@ -362,7 +362,7 @@ describe('switchServices (real Docker)', () => {
     expect(after.every((c) => c.image === a)).toBe(true);
     expect(events).toEqual([
       { kind: 'add', svc: 'app', containers: after.map((c) => c.name).sort(), oldRunning: 2 },
-      { kind: 'remove', svc: 'app', containers: old.map((c) => c.name).sort(), oldRunning: 0 },
+      { kind: 'remove', svc: 'app', containers: old.map((c) => c.name).sort(), oldRunning: 2 },
     ]);
   });
 
@@ -390,6 +390,86 @@ describe('switchServices (real Docker)', () => {
       const cs = await serviceContainers('worker');
       return cs.length === 1 && cs[0]!.image === b;
     }, 30_000, 'worker to run the previous image');
+  });
+
+  it('a rolling service switched before a failing recreate one goes back to its old image, and the override is restored', async () => {
+    const a = await imageId(images.a);
+    const b = await imageId(images.b);
+    expect((await appContainers()).every((c) => c.image === a)).toBe(true);
+    expect((await serviceContainers('worker')).map((c) => c.image)).toEqual([b]);
+    const override = await readFile(join(dir, 'docker-compose.microrun.yml'), 'utf8');
+
+    const err = await switchServices(ref, [
+      { name: 'app', strategy: 'rolling', image: images.b },
+      { name: 'worker', strategy: 'recreate', image: images.exit },
+    ], 30, null).then(
+      () => { throw new Error('switchServices resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('HEALTHCHECK_FAILED');
+    expect((err as AgentError).params.svc).toBe('worker');
+
+    const app = await appContainers();
+    expect(app).toHaveLength(2);
+    expect(app.every((c) => c.image === a && c.health === 'healthy')).toBe(true);
+    await waitFor(async () => {
+      const cs = await serviceContainers('worker');
+      return cs.length === 1 && cs[0]!.image === b;
+    }, 30_000, 'worker to run its previous image');
+    expect(JSON.parse(await readFile(join(dir, 'docker-compose.microrun.yml'), 'utf8'))).toEqual(JSON.parse(override));
+    expect(await request()).toBe(true);
+  });
+
+  it('a recreate service switched before a failing rolling one goes back to its old image', async () => {
+    const a = await imageId(images.a);
+    const b = await imageId(images.b);
+    const appBefore = (await appContainers()).map((c) => c.id).sort();
+    const override = await readFile(join(dir, 'docker-compose.microrun.yml'), 'utf8');
+
+    const err = await switchServices(ref, [
+      { name: 'worker', strategy: 'recreate', image: images.a },
+      { name: 'app', strategy: 'rolling', image: images.bad },
+    ], 15, null).then(
+      () => { throw new Error('switchServices resolved'); },
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AgentError);
+    expect((err as AgentError).code).toBe('HEALTHCHECK_FAILED');
+    expect((err as AgentError).params.svc).toBe('app');
+
+    const worker = await serviceContainers('worker');
+    expect(worker.map((c) => c.image)).toEqual([b]);
+    const app = await appContainers();
+    expect(app.map((c) => c.id).sort()).toEqual(appBefore);
+    expect(app.every((c) => c.image === a)).toBe(true);
+    expect(JSON.parse(await readFile(join(dir, 'docker-compose.microrun.yml'), 'utf8'))).toEqual(JSON.parse(override));
+  });
+
+  it('runOneOff redacts secret-named values from the service compose env, not only from the passed env', async () => {
+    const dbUrl = 'postgres://mr:svc-s3cr3t-pw@db:5432/app';
+    await writeFile(join(dir, 'migenv.yml'), [
+      'services:',
+      '  mig:',
+      '    image: nginx:1.27-alpine',
+      '    environment:',
+      `      MR_T_DB_URL: "${dbUrl}"`,
+      '      MR_T_MODE: production',
+      '',
+    ].join('\n'));
+    const withMig: ComposeRef = { project, dir, files: ['compose.yml', 'migenv.yml'] };
+    const r = await runOneOff(withMig, {
+      service: 'mig',
+      image: 'nginx:1.27-alpine',
+      cmd: 'printenv MR_T_DB_URL MR_T_MODE; printenv MR_T_DB_URL >&2',
+      args: [],
+      env: {},
+    });
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim().split('\n')).toEqual(['***', 'production']);
+    expect(r.log).toContain('***');
+    expect(r.log).not.toContain('svc-s3cr3t-pw');
+    expect(r.stdout).not.toContain('svc-s3cr3t-pw');
   });
 
   it('runOneOff returns the command exit code and stdout', async () => {
@@ -513,6 +593,29 @@ describe('switchServices (real Docker)', () => {
     const res = await inspectEnv(ref, 'DATABASE_URL');
     expect(res.services.find((s) => s.name === 'imghc')?.hasHealthcheck).toBe(true);
     expect(res.services.find((s) => s.name === 'nohc')?.hasHealthcheck).toBe(false);
+    expect(res.services.find((s) => s.name === 'worker')?.hasHealthcheck).toBe(false);
+  });
+
+  it('inspectEnv reports hasHealthcheck null for an image that is not present locally, unless compose decides', async () => {
+    const absent = `mr-t-absent-${randomBytes(3).toString('hex')}:never`;
+    await writeFile(join(dir, 'ghost.yml'), [
+      'services:',
+      '  ghost:',
+      `    image: ${absent}`,
+      '  ghosthc:',
+      `    image: ${absent}`,
+      '    healthcheck:',
+      '      test: ["CMD", "true"]',
+      '  ghostoff:',
+      `    image: ${absent}`,
+      '    healthcheck:',
+      '      disable: true',
+      '',
+    ].join('\n'));
+    const res = await inspectEnv({ project, dir, files: ['compose.yml', 'ghost.yml'] }, 'DATABASE_URL');
+    expect(res.services.find((s) => s.name === 'ghost')?.hasHealthcheck).toBeNull();
+    expect(res.services.find((s) => s.name === 'ghosthc')?.hasHealthcheck).toBe(true);
+    expect(res.services.find((s) => s.name === 'ghostoff')?.hasHealthcheck).toBe(false);
     expect(res.services.find((s) => s.name === 'worker')?.hasHealthcheck).toBe(false);
   });
 });

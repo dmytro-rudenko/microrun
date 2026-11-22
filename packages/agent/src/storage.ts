@@ -15,10 +15,13 @@ import { docker } from './docker.ts';
 type S3Config = Extract<StorageConfig, { kind: 's3' }>;
 type RegistryConfig = Extract<StorageConfig, { kind: 'registry' }>;
 
-const pinRef = (env: string, sha: string, svc: string) => `microrun-pin/${env}:${sha.slice(0, 12)}-${svc}`;
-const archiveName = (env: string, sha: string) => `${env}/${sha}.tar.gz`;
+export const envSlug = (env: string) => env.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'env';
+const pinRef = (env: string, sha: string, svc: string) => `microrun-pin/${envSlug(env)}:${sha.slice(0, 12)}-${svc}`;
+const archiveName = (env: string, sha: string) => `${envSlug(env)}/${sha}.tar.gz`;
 const localFile = (path: string, env: string, sha: string) => join(path, archiveName(env, sha));
-const remoteRef = (s: RegistryConfig, env: string, sha: string, svc: string) => `${s.registry}/${s.repository}:${env}-${sha}-${svc}`;
+const remoteRef = (s: RegistryConfig, env: string, sha: string, svc: string) =>
+  `${s.registry}/${s.repository}:${envSlug(env)}-${sha}-${svc}`;
+const hashOf = (d: string) => d.slice(d.lastIndexOf('@') + 1);
 
 function s3Key(s: S3Config, env: string, sha: string): string {
   const prefix = s.prefix.replace(/^\/+|\/+$/g, '');
@@ -101,7 +104,7 @@ export function storeImages(s: StorageConfig, env: string, sha: string, images: 
     if (s.kind === 'local') {
       const file = localFile(s.path, env, sha);
       const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
-      await mkdir(join(s.path, env), { recursive: true });
+      await mkdir(join(s.path, envSlug(env)), { recursive: true });
       try {
         await save(refs, createWriteStream(tmp));
         await rename(tmp, file);
@@ -134,9 +137,25 @@ export function storeImages(s: StorageConfig, env: string, sha: string, images: 
   });
 }
 
-export async function fetchImages(s: StorageConfig, env: string, sha: string, images: Record<string, string>): Promise<void> {
+async function imageDigests(ref: string): Promise<string[]> {
+  const r = await docker(['image', 'inspect', '--format', '{{.Id}} {{join .RepoDigests " "}}', ref]);
+  return r.code === 0 ? r.stdout.trim().split(/\s+/).filter(Boolean).map(hashOf) : [];
+}
+
+async function verify(kind: string, images: Record<string, string>, digests: Record<string, string>): Promise<void> {
+  for (const [svc, ref] of Object.entries(images)) {
+    const want = digests[svc];
+    if (!want || (await imageDigests(ref)).includes(hashOf(want))) continue;
+    for (const r of Object.values(images)) await docker(['rmi', '-f', r]);
+    throw new AgentError('STORAGE_FAILED', { kind, reason: 'digest' });
+  }
+}
+
+export async function fetchImages(
+  s: StorageConfig, env: string, sha: string, images: Record<string, string>, digests: Record<string, string> = {},
+): Promise<void> {
   if (await imagesPresent(images)) return;
-  return guarded(s.kind, async () => {
+  await guarded(s.kind, async () => {
     if (s.kind === 'local') {
       await load(createReadStream(localFile(s.path, env, sha)));
     } else if (s.kind === 's3') {
@@ -158,6 +177,7 @@ export async function fetchImages(s: StorageConfig, env: string, sha: string, im
       });
     }
   });
+  await verify(s.kind, images, digests);
 }
 
 export function deleteImages(s: StorageConfig, env: string, sha: string, images: Record<string, string>): Promise<void> {

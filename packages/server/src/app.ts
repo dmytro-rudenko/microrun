@@ -45,6 +45,8 @@ export interface AppDeps {
 
 export type Frame = [event: string, data: string];
 
+const oneLine = (s: string) => s.replace(/[\r\n]/g, '');
+
 export const finished = (op: OperationRow) => op.status !== 'pending' && op.status !== 'running';
 
 export async function streamOperation(
@@ -54,14 +56,19 @@ export async function streamOperation(
   frames: (op: OperationRow, ev: OperationEvent | null) => Promise<Frame[]> | Frame[],
 ): Promise<void> {
   let ended = false;
+  let keepalive: ReturnType<typeof setInterval> | undefined;
   let chain = Promise.resolve();
   const unsubscribe = d.bus.subscribe(opId, (ev) => {
     chain = chain.then(() => write(ev));
   });
+  const stop = () => {
+    ended = true;
+    clearInterval(keepalive);
+    unsubscribe();
+  };
   const end = () => {
     if (ended) return;
-    ended = true;
-    unsubscribe();
+    stop();
     reply.raw.end();
   };
   const write = async (ev: OperationEvent | null) => {
@@ -70,15 +77,15 @@ export async function streamOperation(
     if (!op || ended) return;
     const out = await frames(op, ev);
     if (ended) return;
-    for (const [event, data] of out) reply.raw.write(`event: ${event}\ndata: ${data}\n\n`);
+    for (const [event, data] of out) reply.raw.write(`event: ${oneLine(event)}\ndata: ${oneLine(data)}\n\n`);
     if (out.some(([event]) => event === 'done')) end();
   };
-  reply.raw.on('close', () => {
-    ended = true;
-    unsubscribe();
-  });
+  reply.raw.on('close', stop);
   reply.hijack();
   reply.raw.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  keepalive = setInterval(() => {
+    if (!ended) reply.raw.write(': keepalive\n\n');
+  }, 15_000);
   chain = chain.then(() => write(null));
   await chain;
 }
@@ -96,7 +103,7 @@ function firstFile(candidates: (() => string)[]): string | null {
 const here = (rel: string) => fileURLToPath(new URL(rel, import.meta.url));
 
 export async function buildApp(d: AppDeps): Promise<FastifyInstance> {
-  const app = Fastify({ logger: false });
+  const app = Fastify({ logger: false, trustProxy: d.config.trustProxy ?? false });
   await app.register(websocket);
   registerAuth(app, {
     repo: d.repo,

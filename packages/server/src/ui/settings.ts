@@ -11,6 +11,8 @@ const PROXY_MODES = ['external', 'bundled'] as const;
 const UNIT_SECONDS = { hours: 3600, days: 86_400 };
 const UNITS = ['hours', 'days'] as const;
 const MIN_RETENTION_S = 3600;
+const MIN_HEALTH_TIMEOUT_S = 5;
+const SLUG = /^[a-z0-9][a-z0-9-]{0,62}$/;
 
 const REQUIRED = 'settings.err.required';
 const NUMBER = 'settings.err.number';
@@ -18,6 +20,9 @@ const RETENTION = 'settings.err.retention';
 const UNIT = 'settings.err.unit';
 const SERVICES = 'settings.err.services';
 const CHOICE = 'settings.err.choice';
+const MIGRATION_SERVICE = 'settings.err.migrationService';
+const HEALTH_TIMEOUT = 'settings.err.healthTimeout';
+const NAME_SLUG = 'settings.err.slug';
 
 type Body = Record<string, string | string[]>;
 type Errors = Record<string, string>;
@@ -141,8 +146,15 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
 
   const retentionS = parseRetention(body, errors);
 
+  const name = req('name');
+  if (name && !SLUG.test(name)) errors.name = NAME_SLUG;
+  const migrationService = req('migration_service');
+  if (services && migrationService && !services.some((s) => s.name === migrationService)) errors.migration_service = MIGRATION_SERVICE;
+  const healthTimeoutS = whole('health_timeout_s', 120);
+  if (!errors.health_timeout_s && healthTimeoutS < MIN_HEALTH_TIMEOUT_S) errors.health_timeout_s = HEALTH_TIMEOUT;
+
   const value: EnvFormParsed = {
-    name: req('name'),
+    name,
     branch: req('branch'),
     isProduction,
     position: whole('position', 0),
@@ -151,7 +163,7 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
     composeDir: req('compose_dir'),
     composeFiles: lines(text(body, 'compose_files')),
     services: services ?? [],
-    migrationService: req('migration_service'),
+    migrationService,
     dbKind: choice(DB_KINDS, 'db_kind', text(body, 'db_kind'), 'postgres'),
     dbUrlEnv: req('db_url_env'),
     migrationTables: lines(text(body, 'migration_tables')),
@@ -159,7 +171,7 @@ export function parseEnvForm(body: Body): { ok: true; value: EnvFormParsed } | {
     contractCmd: text(body, 'contract_cmd') || null,
     cleanupCmd: text(body, 'cleanup_cmd') || null,
     schemaCheck: choice(SCHEMA_CHECKS, 'schema_check', text(body, 'schema_check') || (isProduction ? 'dry_run' : 'post_check'), 'post_check'),
-    healthTimeoutS: whole('health_timeout_s', 120),
+    healthTimeoutS,
     storageKind,
     storageConfig: parseStorage(body, storageKind, errors),
     retentionS,
@@ -174,11 +186,14 @@ export function serversView(
   servers: { id: string; name: string; online: boolean; builtin: boolean; agentVersion: string | null; proxyMode: string }[],
   csrf: string,
   created?: { name: string; token: string; command: string },
+  error?: string,
 ): Html {
   const token = html`<input type="hidden" name="_csrf" value="${csrf}">`;
+  const proxyForm = (s: (typeof servers)[number]) =>
+    html`<form method="post" action="/settings/servers/${s.id}/proxy">${token}${dropdown('proxy_mode', s.proxyMode, PROXY_MODES.map((m) => ({ value: m, label: m })), html` aria-label="${i.t('settings.servers.proxy')}" onchange="this.form.submit()"`)}</form>`;
   const row = (s: (typeof servers)[number]) => html`<tr data-testid="server-row-${s.name}" data-status="${s.online ? 'online' : 'offline'}">
 <td>${s.name}</td><td>${tr(i, s.online ? 'agent.online' : 'agent.offline')}${s.builtin ? html` · ${tr(i, 'agent.builtin')}` : ''}</td>
-<td>${s.agentVersion ?? '—'}</td><td>${s.proxyMode}</td>
+<td>${s.agentVersion ?? '—'}</td><td>${proxyForm(s)}</td>
 <td>${s.builtin ? '' : html`<form method="post" action="/settings/servers/${s.id}/token">${token}<button type="submit">${tr(i, 'settings.servers.reissue')}</button></form>`}</td></tr>`;
   return html`<h1>${tr(i, 'settings.servers.title')}</h1>
 ${created
@@ -186,6 +201,7 @@ ${created
 <code data-testid="agent-token">${created.token}</code>
 <p>${tr(i, 'settings.servers.command')}</p><pre data-testid="agent-command">${created.command}</pre></div>`
   : ''}
+${error ? html`<div class="alert" role="alert" data-testid="server-error">${error}</div>` : ''}
 <form method="post" action="/settings/servers" class="row">${token}
 <label>${tr(i, 'settings.servers.name')}<input name="name" data-testid="server-name" required></label>
 <label>${tr(i, 'settings.servers.proxy')}<select name="proxy_mode">${PROXY_MODES.map((m) => html`<option value="${m}">${m}</option>`)}</select></label>
@@ -215,10 +231,12 @@ function errorsBlock(i: I18n, errors: Record<string, string>): Html | string {
 <ul>${entries.map(([f, m]) => html`<li><b>${fieldLabel(i, f.startsWith('retention') ? 'retention' : f)}</b>: ${i.t(m)}</li>`)}</ul></div>`;
 }
 
-const bindResult = (bind: { ok: boolean; text: string }) =>
+type BindResult = { ok: boolean; text: string };
+
+const bindResult = (bind: BindResult) =>
   html`<div class="alert${bind.ok ? ' ok' : ''}" data-testid="bind-result" data-ok="${bind.ok ? 'true' : 'false'}">${bind.text}</div>`;
 
-const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: { ok: boolean; text: string } | undefined) =>
+const envActions = (i: I18n, id: string | undefined, csrf: Html, bind: BindResult | undefined) =>
   html`<form method="post" action="/settings/env/${id}/bind">${csrf}<button type="submit" data-testid="env-bind-db">${tr(i, 'settings.env.bind')}</button></form>
 ${bind ? bindResult(bind) : ''}
 <form method="post" action="/settings/env/${id}/token">${csrf}<button type="submit">${tr(i, 'settings.env.reissue')}</button></form>`;
@@ -235,7 +253,8 @@ export function envFormView(
     csrf: string;
     isNew: boolean;
     deployToken?: string;
-    bind?: { ok: boolean; text: string };
+    bind?: BindResult;
+    rollingHint?: boolean;
   },
 ): Html {
   const v = (k: keyof EnvFormValues) => p.values[k] ?? '';
@@ -252,6 +271,7 @@ export function envFormView(
 
   return html`<h1>${tr(i, p.isNew ? 'settings.env.newTitle' : 'settings.env.editTitle')}</h1>
 ${errorsBlock(i, p.errors)}
+${p.rollingHint ? html`<div class="alert w" role="status" data-testid="rolling-hint">${tr(i, 'settings.env.rollingHint')}</div>` : ''}
 <form method="post" action="/settings/env" class="envform">${csrf}${id ? html`<input type="hidden" name="id" value="${id}">` : ''}
 <fieldset><legend>${tr(i, 'settings.sec.general')}</legend>
 ${field('name', entry('name', v('name')))}

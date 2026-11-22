@@ -5,7 +5,7 @@ export const PROTOCOL_VERSION = 1;
 
 export const RESULT_CODES = ['ALREADY_ACTIVE','BRANCH_MISMATCH','COMMIT_BLOCKED','COMMIT_EXPIRED','SCHEMA_DESTRUCTIVE_APPROVED',
   'AGENT_OFFLINE','ENV_BUSY','DB_NOT_BOUND','DB_MARKER_MISMATCH','IMAGE_PULL_FAILED','SCHEMA_DESTRUCTIVE','MIGRATION_FAILED',
-  'HEALTHCHECK_FAILED','AGENT_LOST','CLEANUP_MISMATCH','CONTRACT_FAILED','STORAGE_FAILED','INVALID_REQUEST','UNAUTHORIZED'] as const;
+  'HEALTHCHECK_FAILED','AGENT_LOST','CLEANUP_MISMATCH','CONTRACT_FAILED','STORAGE_FAILED','AGENT_ERROR','INVALID_REQUEST','UNAUTHORIZED'] as const;
 export type ResultCode = typeof RESULT_CODES[number];
 
 export const REJECT_CODES: ResultCode[] = ['COMMIT_BLOCKED','COMMIT_EXPIRED','BRANCH_MISMATCH','SCHEMA_DESTRUCTIVE','DB_MARKER_MISMATCH','DB_NOT_BOUND','INVALID_REQUEST'];
@@ -42,12 +42,12 @@ export type Command =
   | { type: 'runCommand'; compose: ComposeRef; service: string; image: string; cmd: string; args: string[]; env: Record<string,string> }
   | { type: 'switchServices'; compose: ComposeRef; services: ServiceSpec[]; healthTimeoutS: number; proxyMode: 'external'|'bundled' }
   | { type: 'storeImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> }
-  | { type: 'fetchImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> }
+  | { type: 'fetchImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string>; digests?: Record<string,string> }
   | { type: 'deleteImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> };
 
 export interface ResultMap {
   ping: { agentVersion: string };
-  inspectEnv: { services: { name: string; image: string|null; replicas: number; hasHealthcheck: boolean; containerName: string|null; hostPorts: string[]; hasDbUrl: boolean }[] };
+  inspectEnv: { services: { name: string; image: string|null; replicas: number; hasHealthcheck: boolean|null; containerName: string|null; hostPorts: string[]; hasDbUrl: boolean }[] };
   readMarker: { markers: { service: string; marker: { envId: string; envName: string } | null }[] };
   writeMarker: { envId: string };
   pullImages: { digests: Record<string,string> };
@@ -109,7 +109,7 @@ export const commandSchema: z.ZodType<Command> = z.discriminatedUnion('type', [
     healthTimeoutS: z.number(), proxyMode: z.enum(['external', 'bundled']),
   }),
   z.object({ type: z.literal('storeImages'), ...imagesCommand }),
-  z.object({ type: z.literal('fetchImages'), ...imagesCommand }),
+  z.object({ type: z.literal('fetchImages'), ...imagesCommand, digests: stringMap.optional() }),
   z.object({ type: z.literal('deleteImages'), ...imagesCommand }),
 ]);
 

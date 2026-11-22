@@ -36,8 +36,8 @@ async function servers(dataDir: string) {
   }
 }
 
-async function run(dataDir: string, dockerSocket: string) {
-  const s = await start(env(dataDir), { dockerSocket, port: 0 });
+async function run(dataDir: string, dockerSocket: string, extra: Record<string, string> = {}) {
+  const s = await start(env(dataDir, extra), { dockerSocket, port: 0 });
   stops.push(s.stop);
   return s;
 }
@@ -55,6 +55,22 @@ describe('start', () => {
     const res = await fetch(`http://127.0.0.1:${port}/login`);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain('id="username"');
+  });
+
+  test('trusts the proxy named by MICRORUN_TRUST_PROXY for the login rate limit', async () => {
+    const data = tempDir('mr-main-');
+    const { app } = await run(data, join(data, 'no-such.sock'), { MICRORUN_TRUST_PROXY: '127.0.0.1' });
+    const { port } = app.server.address() as AddressInfo;
+    const attempt = (client: string) =>
+      fetch(`http://127.0.0.1:${port}/login`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-forwarded-for': client },
+        body: new URLSearchParams({ username: 'admin', password: 'wrong-password-1' }).toString(),
+      }).then((r) => r.status);
+    for (let i = 0; i < 5; i++) expect(await attempt('203.0.113.1')).toBe(401);
+    expect(await attempt('203.0.113.1')).toBe(429);
+    expect(await attempt('203.0.113.2')).toBe(401);
   });
 
   test('rejects an admin password shorter than 12 characters with the config message', async () => {

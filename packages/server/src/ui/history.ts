@@ -13,6 +13,7 @@ export interface HistoryVM {
   status: string;
   durationS: number | null;
   reason: { code: string; params: Record<string, string | number> } | null;
+  cleanup?: { rule: string; expected: number; deleted: number }[];
 }
 
 const actorText = (i: I18n, actor: string) =>
@@ -22,7 +23,8 @@ function row(i: I18n, h: HistoryVM): Html {
   return html`<tr><td>${i.date(h.at)}</td><td>${h.isProduction ? html`<span class="tag">${h.env}</span>` : h.env}</td><td>${tr(i, `kind.${h.kind}`)}</td>
 <td class="sha">${short(h.from)} → ${short(h.to)}</td><td class="hide-sm">${actorText(i, h.actor)}</td>
 <td><span class="${h.status === 'ok' ? 'ok' : 'bad'}">${tr(i, `status.${h.status}`)}</span>${h.durationS !== null && html` · ${i.unit(h.durationS, 'second')}`}
-${h.reason && html`<div class="small">${codeText(i, h.reason.code, h.reason.params)}</div>`}</td></tr>`;
+${h.reason && html`<div class="small">${codeText(i, h.reason.code, h.reason.params)}</div>`}
+${h.cleanup?.map((c) => html`<div class="small">${tr(i, 'cl.result', { rule: c.rule, p: i.num(c.expected), a: i.num(c.deleted) })}</div>`)}</td></tr>`;
 }
 
 export function historyView(i: I18n, ops: HistoryVM[], envs: { id: string; name: string }[], filter: string): Html {

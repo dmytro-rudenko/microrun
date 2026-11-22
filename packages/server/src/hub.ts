@@ -22,6 +22,8 @@ export type LocalHandler = (key: { opId: string; step: string }, cmd: Command) =
 
 type Key = { opId: string; step: string };
 
+const HELLO_TIMEOUT_MS = 10_000;
+
 interface Pending {
   id: string;
   serverId: string;
@@ -61,6 +63,7 @@ export class Hub implements AgentPort {
     const conn: Conn = { socket, missed: 0, heartbeat: setInterval(() => this.beat(serverId, conn), this.heartbeatMs) };
     conn.heartbeat.unref?.();
     this.conns.set(serverId, conn);
+    old?.socket.close(4000);
 
     socket.on('message', (data) => this.onMessage(conn, data));
     socket.on('close', () => {
@@ -97,6 +100,13 @@ export class Hub implements AgentPort {
 
   isOnline(serverId: string): boolean {
     return this.locals.has(serverId) || this.conns.has(serverId);
+  }
+
+  disconnect(serverId: string): void {
+    const conn = this.conns.get(serverId);
+    if (!conn) return;
+    this.detach(serverId);
+    conn.socket.close(4003);
   }
 
   onStatus(fn: (serverId: string, online: boolean) => void): void {
@@ -177,10 +187,13 @@ export function registerAgentRoute(app: FastifyInstance, hub: Hub, repo: Repo): 
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     const server = token ? repo.serverByTokenHash(createHash('sha256').update(token).digest('hex')) : Promise.resolve(null);
     let greeted = false;
+    const helloTimer = setTimeout(() => socket.close(4002), HELLO_TIMEOUT_MS);
+    socket.on('close', () => clearTimeout(helloTimer));
 
     socket.on('message', async (data) => {
       if (greeted) return;
       greeted = true;
+      clearTimeout(helloTimer);
       const row = await server.catch(() => null);
       if (!row) {
         socket.send(JSON.stringify({ t: 'bye', code: 'UNAUTHORIZED' }));

@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AgentError, parseCleanupLines, type ComposeRef, type DbRef } from '@microrun/core/protocol';
 import {
   diffSchema, normalizeDefault, normalizeType, snapshotSchema as snapshotShape,
@@ -188,6 +188,26 @@ async function dryrunContainers(opId: string): Promise<string[]> {
   return out.split('\n').filter((n) => n === `microrun-dryrun-${opId}`);
 }
 
+const SQLITE_PINNED = 'keinos/sqlite3:3.50.4@sha256:7ea29f0c7e91a8c3f315e831459d07000f34e9e9b25fbc30be2e0481b3e0450f';
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function processArgs(container: string): Promise<string> {
+  const r = await docker(['top', container, '-eo', 'pid,args']);
+  return r.code === 0 ? r.stdout.split('\n').slice(1).map((l) => l.trim().replace(/^\d+\s+/, '')).join('\n') : '';
+}
+
+async function waitForProcess(find: () => Promise<string[]>, program: string): Promise<{ container: string; args: string }> {
+  for (let i = 0; i < 400; i++) {
+    for (const container of await find()) {
+      const args = await processArgs(container);
+      if (args.split('\n').some((l) => l.trim().startsWith(program) || l.includes(`/${program} `))) return { container, args };
+    }
+    await sleep(150);
+  }
+  throw new Error(`no ${program} process appeared`);
+}
+
 function sqlTables(s: SchemaSnapshot): SqlSnapshot['tables'] {
   if (s.kind !== 'sql') throw new Error(`expected an sql snapshot, got ${s.kind}`);
   return s.tables;
@@ -346,6 +366,54 @@ describe.each(engines)('database layer on $kind', (e) => {
     expect(await dryrunContainers(opId)).toEqual([]);
   });
 
+  it('removes a leftover container named microrun-dryrun-<opId> before a resumed dry-run', async () => {
+    const { dryRunExpand } = await lib();
+    const opId = op('resume');
+    await dk(['create', '--name', `microrun-dryrun-${opId}`, e.appImage, 'true']);
+    const r = await dryRunExpand(ref, {
+      image: e.appImage, cmd: e.addCmd, migrationTables: ['knex_migrations'], opId, env: { NEW_COL: 'nickname' },
+    });
+    expect(diffSchema(base, r.snapshot)).toEqual([{ ...e.addDiff, detail: expect.any(String) }]);
+    expect(await dryrunContainers(opId)).toEqual([]);
+  });
+
+  it.runIf(e.kind === 'postgres')('keeps the source password out of the pg_dump argv during a dry-run', async () => {
+    const { dryRunExpand } = await lib();
+    const opId = op('argv');
+    const psql = (sql: string) => dk(compose('exec', '-T', 'db', 'psql', '-U', 'postgres', '-d', 'app', '-tAc', sql));
+    const holder = psql('BEGIN; LOCK TABLE orders IN ACCESS EXCLUSIVE MODE; SELECT pg_sleep(600);').catch(() => '');
+    await vi.waitFor(async () => {
+      expect((await psql("select count(*) from pg_locks l join pg_class c on c.oid = l.relation where c.relname = 'orders' and l.mode = 'AccessExclusiveLock' and l.granted")).trim()).toBe('1');
+    }, { timeout: 30_000, interval: 200 });
+    const run = dryRunExpand(ref, {
+      image: e.appImage, cmd: e.addCmd, migrationTables: ['knex_migrations'], opId, env: { NEW_COL: 'nickname' },
+    });
+    run.catch(() => {});
+    let seen: { args: string };
+    try {
+      seen = await waitForProcess(async () => [`microrun-dryrun-${opId}`], 'pg_dump');
+    } finally {
+      await psql("select pg_terminate_backend(pid) from pg_stat_activity where query like '%pg_sleep(600)%' and pid <> pg_backend_pid()");
+      await holder;
+    }
+    expect(seen.args).toContain('pg_dump');
+    expect(seen.args).not.toContain('pw-secret');
+    const r = await run;
+    expect(diffSchema(base, r.snapshot)).toEqual([{ ...e.addDiff, detail: expect.any(String) }]);
+  });
+
+  it.runIf(e.kind === 'sqlite')('runs the sqlite client from the digest-pinned image', async () => {
+    const { snapshotSchema } = await lib();
+    const since = String(Math.floor(Date.now() / 1000) - 1);
+    await snapshotSchema(ref);
+    const until = String(Math.floor(Date.now() / 1000) + 1);
+    const out = await dk(['events', '--since', since, '--until', until, '--filter', 'type=container', '--filter', 'event=create',
+      '--format', '{{index .Actor.Attributes "image"}}|{{index .Actor.Attributes "com.docker.compose.project"}}']);
+    const images = out.split('\n').map((l) => l.trim().split('|')).filter(([img, project]) => img.startsWith('keinos/sqlite3') && !project).map(([img]) => img);
+    expect(images.length).toBeGreaterThan(0);
+    for (const image of images) expect(image).toBe(SQLITE_PINNED);
+  });
+
   it('fails a broken expand with MIGRATION_FAILED carrying the log and removes the temp container', async () => {
     const { dryRunExpand, snapshotSchema } = await lib();
     const opId = op('fail');
@@ -357,6 +425,56 @@ describe.each(engines)('database layer on $kind', (e) => {
     expect(JSON.stringify((err as AgentError).params)).toContain('expand-broke');
     expect(await dryrunContainers(opId)).toEqual([]);
     expect(await snapshotSchema(ref)).toEqual(base);
+  });
+});
+
+describe('database client argv', () => {
+  const project = `mrdb-argv-${randomBytes(3).toString('hex')}`;
+  const secret = `argv-secret-${randomBytes(3).toString('hex')}`;
+  let dir = '';
+  const hang = (port: number) => ({ image: 'busybox:1.36.1', command: ['sh', '-c', `while :; do sleep 3600 | nc -l -p ${port}; done`] });
+  const app = (url: string) => ({ image: 'busybox:1.36.1', command: IDLE, environment: { DATABASE_URL: url } });
+  const compose = (...extra: string[]) => ['compose', '-p', project, '--project-directory', dir, '-f', join(dir, 'compose.yml'), ...extra];
+  const dbRef = (service: string, dbKind: DbKind): DbRef => ({ compose: { project, dir, files: ['compose.yml'] }, service, dbKind, dbUrlEnv: 'DATABASE_URL' });
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'mrdb-'));
+    await writeFile(join(dir, 'compose.yml'), JSON.stringify({
+      services: {
+        pg: hang(5432),
+        mongo: hang(27017),
+        pgapp: app(`postgres://postgres:${secret}@pg:5432/app?sslmode=disable`),
+        mongoapp: app(`mongodb://root:${secret}@mongo:27017/app?authSource=admin`),
+      },
+    }, null, 2));
+    await dk(compose('up', '-d', '--wait', '--wait-timeout', '120'));
+  });
+
+  afterAll(async () => {
+    if (dir) {
+      await docker(compose('down', '-v', '--remove-orphans', '--timeout', '1'));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  const clients = (image: string) => async () =>
+    (await dk(['ps', '-q', '--filter', `network=${project}_default`, '--filter', `ancestor=${image}`])).split('\n').map((l) => l.trim()).filter(Boolean);
+
+  it.each([
+    { service: 'pgapp', kind: 'postgres' as DbKind, image: 'postgres:18-alpine', program: 'psql' },
+    { service: 'mongoapp', kind: 'mongodb' as DbKind, image: 'mongo:8', program: 'mongosh' },
+  ])('keeps the password out of the $program argv while a snapshot runs', async ({ service, kind, image, program }) => {
+    const { snapshotSchema } = await lib();
+    const run = snapshotSchema(dbRef(service, kind)).then(() => null, (x: unknown) => x);
+    let seen: { container: string; args: string };
+    try {
+      seen = await waitForProcess(clients(image), program);
+    } finally {
+      for (const c of await clients(image)()) await docker(['rm', '-f', c]);
+    }
+    await run;
+    expect(seen.args).toContain(program);
+    expect(seen.args).not.toContain(secret);
   });
 });
 

@@ -20,6 +20,8 @@ export interface ReleaseVM {
   cleanupResult: { rule: string; deleted: number }[] | null;
   activationSeq: number | null;
   imagePurged: boolean;
+  stored: boolean;
+  cleanupFailed: { code: string; params: Record<string, string | number> } | null;
 }
 
 export interface EnvVM {
@@ -68,6 +70,10 @@ export const blockedNote = (i: I18n, r: ReleaseVM) =>
 export const failNote = (i: I18n, r: ReleaseVM) =>
   r.failNote && html`<div class="small failed">${codeText(i, r.failNote.code, r.failNote.params)}</div>`;
 
+export const unstored = (r: ReleaseVM) => !r.stored && (r.state === 'active' || r.state === 'available');
+
+export const storageWarn = (i: I18n) => html`<div class="alert w">${tr(i, 'storage.failedWarn')}</div>`;
+
 export const notes = (i: I18n, r: ReleaseVM) => html`${blockedNote(i, r)}${failNote(i, r)}`;
 
 export const windowLeft = (i: I18n, r: ReleaseVM) => (r.windowLeftMs === null ? null : i.left(r.windowLeftMs));
@@ -79,7 +85,7 @@ function card(i: I18n, e: EnvVM, r: ReleaseVM, now: number, selected?: string): 
   const left = windowLeft(i, r);
   return html`<div class="rel ${r.state}${r.id === selected ? ' sel' : ''}" data-testid="rel-${e.name}-${short(r.sha)}" data-state="${r.state}" hx-get="/panel/${r.id}" hx-target="#panel" hx-trigger="click, keydown[key=='Enter']" tabindex="0" role="button">
 <span class="st">${stateLabel(i, r.state)}</span><span class="sha">${short(r.sha)}</span><div>${r.message}</div>
-<div class="small">${r.author} · ${i.ago(r.deployedAt, now)}${left && html` · ${tr(i, 'window.left', { t: left })}`}</div>${windowBar(r)}</div>`;
+<div class="small">${r.author} · ${i.ago(r.deployedAt, now)}${left && html` · ${tr(i, 'window.left', { t: left })}`}</div>${windowBar(r)}${unstored(r) && storageWarn(i)}</div>`;
 }
 
 function column(i: I18n, e: EnvVM, now: number, selected?: string): Html {

@@ -18,7 +18,9 @@ const USAGE = [
 const out = (s: string) => void process.stdout.write(`${s}\n`);
 const err = (s: string) => void process.stderr.write(`${s}\n`);
 
-function unit(url: string, token: string | undefined, stateDir: string | undefined): string {
+const ENV_FILE = '/etc/microrun/agent.env';
+
+function unit(url: string, stateDir: string | undefined): string {
   const bin = fileURLToPath(import.meta.url);
   return [
     '[Unit]',
@@ -29,7 +31,7 @@ function unit(url: string, token: string | undefined, stateDir: string | undefin
     '[Service]',
     `ExecStart=${process.execPath} ${bin} agent${stateDir ? ` --state-dir ${stateDir}` : ''}`,
     `Environment=MICRORUN_URL=${url}`,
-    ...(token ? [`Environment=MICRORUN_AGENT_TOKEN=${token}`] : []),
+    `EnvironmentFile=${ENV_FILE}`,
     'Restart=always',
     'RestartSec=5',
     '',
@@ -58,7 +60,12 @@ async function agent(argv: string[], env: NodeJS.ProcessEnv): Promise<number> {
     return 1;
   }
   if (install) {
-    process.stdout.write(unit(url, token, values['state-dir']));
+    process.stdout.write(unit(url, values['state-dir']));
+    err([
+      `microrun agent: the unit reads MICRORUN_AGENT_TOKEN from ${ENV_FILE}; create it readable by root only:`,
+      `  sudo install -d -m 700 /etc/microrun`,
+      `  printf 'MICRORUN_AGENT_TOKEN=%s\\n' '<token>' | sudo install -m 600 /dev/stdin ${ENV_FILE}`,
+    ].join('\n'));
     return 0;
   }
   if (!token) {

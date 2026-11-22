@@ -51,8 +51,10 @@ let gate: Promise<void> | null;
 let markers: Record<string, { envId: string; envName: string }>;
 let dryRunSnapshot: SchemaSnapshot;
 let contractExit: number;
-let inspected: { name: string; hasHealthcheck: boolean; hostPorts: string[] }[];
+let inspected: { name: string; hasHealthcheck: boolean | null; hostPorts: string[] }[];
 let inspectCalls: number;
+let applyOut: string;
+let previewExit: number;
 
 const PREVIEW_OUT = '{"rule":"orphans","description":"Orphan posts","count":2}\n{"rule":"tags","description":"Unused tags","count":1}\n';
 const APPLY_OUT = '{"rule":"orphans","deleted":2}\n{"rule":"tags","deleted":1}\n';
@@ -71,7 +73,10 @@ async function agent(_key: { opId: string; step: string }, cmd: Command): Promis
       inspectCalls++;
       return { services: inspected.map((s) => ({ image: null, replicas: 1, containerName: null, hasDbUrl: true, ...s })) };
     case 'runCommand':
-      if (cmd.cmd === 'npm run cleanup') return { exitCode: 0, stdout: cmd.args[0] === '--dry-run' ? PREVIEW_OUT : APPLY_OUT, log: '' };
+      if (cmd.cmd === 'npm run cleanup') {
+        const dry = cmd.args[0] === '--dry-run';
+        return { exitCode: dry ? previewExit : 0, stdout: dry ? PREVIEW_OUT : applyOut, log: '' };
+      }
       return { exitCode: cmd.cmd === 'npm run contract' ? contractExit : 0, stdout: '', log: '' };
     case 'switchServices':
       switchCalled = true;
@@ -185,6 +190,8 @@ beforeEach(async () => {
   contractExit = 0;
   inspected = [{ name: 'web', hasHealthcheck: true, hostPorts: [] }];
   inspectCalls = 0;
+  applyOut = APPLY_OUT;
+  previewExit = 0;
   const clock = () => now;
   serverId = (await repo.createServer({ name: 'main', agentTokenHash: hashToken('agent-token'), builtin: true })).id;
   prodId = (await repo.saveEnv(envInput({ name: 'production', branch: 'main', isProduction: true, position: 0, serverId, project: 'shop', token: PROD_TOKEN }))).id;
@@ -197,7 +204,7 @@ beforeEach(async () => {
   const bus = new OpBus();
   const decryptStorage = (e: { storageConfigEnc: Buffer }) => JSON.parse(decrypt(config.secretKey, e.storageConfigEnc)) as StorageConfig;
   orchestrator = new Orchestrator({ repo, agent: hub, clock, decryptStorage, emit: (opId, ev) => bus.emit(opId, ev) });
-  const scheduler = new Scheduler({ repo, agent: hub, clock, decryptStorage });
+  const scheduler = new Scheduler({ repo, agent: hub, clock, decryptStorage, runContract: (id) => orchestrator.runContract(id) });
   app = await buildApp({ config, repo, hub, orchestrator, scheduler, clock, bus });
   await app.ready();
 });
@@ -415,6 +422,38 @@ describe('UI routes', () => {
   const testText = (body: string, testid: string) => new RegExp(`data-testid="${testid}"[^>]*>([^<]*)<`).exec(body)?.[1];
   const tbody = (body: string) => /<tbody>([\s\S]*)<\/tbody>/.exec(body)?.[1] ?? '';
   const rowCount = (body: string) => tbody(body).match(/<tr>/g)?.length ?? 0;
+  const keyShaped = /^[A-Za-z]\w*(\.\w+)+$/;
+  const fieldError = (body: string, field: string) => new RegExp(`<li><b>${en.t(`settings.f.${field}`)}</b>: ([^<]*)</li>`).exec(body)?.[1];
+
+  async function busy(): Promise<() => Promise<void>> {
+    let open!: () => void;
+    gate = new Promise((r) => (open = r));
+    switchCalled = false;
+    const res = await postDeploy(PROD_TOKEN, 'c3c3c3c3');
+    expect(res.statusCode, res.body).toBe(202);
+    await vi.waitFor(() => expect(switchCalled).toBe(true), { timeout: 3000, interval: 5 });
+    return async () => {
+      open();
+      gate = null;
+      await idle();
+    };
+  }
+
+  function fakeSocket() {
+    const closers: ((arg?: unknown) => void)[] = [];
+    const socket = {
+      closed: false,
+      send: () => {},
+      on: (event: 'message' | 'close', fn: (arg?: unknown) => void) => {
+        if (event === 'close') closers.push(fn);
+      },
+      close: () => {
+        socket.closed = true;
+        for (const fn of closers) fn();
+      },
+    };
+    return socket;
+  }
 
   describe('POST /rollback', () => {
     it('answers 422 when the production confirm names another env and starts nothing', async () => {
@@ -471,6 +510,38 @@ describe('UI routes', () => {
       expect(events[0]!.data).toContain(`data-release="${relB.id}"`);
       expect(events[0]!.data).toContain('data-testid="cleanup-apply"');
     });
+
+    it('strips every line terminator, a lone \\r included, from the done frame', async () => {
+      await rolledBack();
+      const relB = await release(B);
+      await db('releases').where({ id: relB.id }).update({ message: 'fix\revent: steps\rdata: <b>pwned</b>\r\ndata: x\n' });
+      const preview = (await ops()).find((o) => o.kind === 'cleanup' && o.toReleaseId === relB.id)!;
+      const res = await get(`/ops/${preview.id}/events`);
+      expect(res.body).not.toContain('\r');
+      expect(sse(res.body).map((e) => e.event)).toEqual(['done']);
+      expect(sse(res.body)[0]!.data).toContain('fix');
+    });
+
+    it('answers ENV_BUSY with 409 and an alert fragment retargeted into the panel alert slot', async () => {
+      await deploy(A);
+      await deploy(B);
+      const free = await busy();
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'production' });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.body).toMatch(/<div class="alert"[^>]*role="alert"/);
+      expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
+      expect(res.headers['hx-retarget']).toBe('#panel-alert');
+      expect(res.headers['hx-reswap']).toBe('innerHTML');
+      await free();
+    });
+
+    it('retargets a wrong-confirm 422 into the panel alert slot as well', async () => {
+      await deploy(A);
+      await deploy(B);
+      const res = await post('/rollback', { envId: prodId, releaseId: (await release(A)).id, confirm: 'staging' });
+      expect(res.statusCode).toBe(422);
+      expect(res.headers['hx-retarget']).toBe('#panel-alert');
+    });
   });
 
   describe('cleanup', () => {
@@ -519,6 +590,28 @@ describe('UI routes', () => {
       expect(res.body).not.toContain('data-testid="cleanup-apply"');
       expect((await release(B)).cleanupState).toBe('dismissed');
       expect((await post('/cleanup/dismiss', { releaseId: 'nope' })).statusCode).toBe(404);
+    });
+
+    it('shows a failed dry-run with a retry-preview button instead of polling, and the retry runs a new preview', async () => {
+      previewExit = 1;
+      await rolledBack();
+      const relB = await release(B);
+      const failed = (await ops()).find((o) => o.kind === 'cleanup' && o.toReleaseId === relB.id)!;
+      expect(failed.status).toBe('failed');
+      const panel = (await get(`/panel/${relB.id}`)).body;
+      expect(panel).not.toContain('hx-trigger="every 2s"');
+      expect(panel).not.toContain('data-testid="cleanup-pending"');
+      expect(panel).toContain(codeMessage(en, failed.code!, failed.params as Record<string, string | number>));
+      expect(panel).toContain('data-testid="cleanup-retry"');
+      expect(panel).toContain('hx-post="/cleanup/preview"');
+
+      previewExit = 0;
+      const res = await post('/cleanup/preview', { releaseId: relB.id });
+      expect(res.statusCode, res.body).toBe(200);
+      await idle();
+      const after = (await get(`/panel/${relB.id}`)).body;
+      expect(after).toContain('data-testid="cleanup-apply"');
+      expect(after).not.toContain('data-testid="cleanup-retry"');
     });
   });
 
@@ -575,6 +668,18 @@ describe('UI routes', () => {
       const res = await post('/close-window', { releaseId: 'nope' });
       expect(res.statusCode).toBe(422);
       expect(await ops()).toEqual([]);
+    });
+
+    it('answers 409 with the ENV_BUSY alert while another operation runs and expires nothing', async () => {
+      await deploy(A);
+      await deploy(B);
+      const free = await busy();
+      const res = await post('/close-window', { releaseId: (await release(A)).id });
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.body).toContain('role="alert"');
+      expect(res.body).toContain(codeMessage(en, 'ENV_BUSY', { env: 'production' }));
+      expect((await release(A)).state).toBe('available');
+      await free();
     });
   });
 
@@ -677,6 +782,36 @@ describe('UI routes', () => {
       expect(await storageOf(stagingId)).toMatchObject({ kind: 's3', secretKey: '' });
     });
 
+    it('saves a rolling service whose healthcheck is still unknown and shows a non-blocking hint', async () => {
+      inspected = [{ name: 'web', hasHealthcheck: null, hostPorts: [] }];
+      const res = await post('/settings/env', stagingBody({ branch: 'release' }));
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.body).not.toContain('data-testid="env-error"');
+      expect(res.body).toContain('data-testid="rolling-hint"');
+      expect((await repo.getEnv(stagingId))!.branch).toBe('release');
+    });
+
+    it.each([
+      ['name', { name: 'production' }],
+      ['branch', { branch: 'main' }],
+    ])('answers 422 with a field error on %s when a new env reuses another env', async (field, over) => {
+      const envs = (await repo.listEnvs()).length;
+      const res = await post('/settings/env', envBody(over));
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.body).toContain('data-testid="env-error"');
+      const message = fieldError(res.body, field);
+      expect(message).toBeTruthy();
+      expect(message).not.toMatch(keyShaped);
+      expect(await repo.listEnvs()).toHaveLength(envs);
+    });
+
+    it('answers 422 with a field error when an existing env is renamed to another env name', async () => {
+      const res = await post('/settings/env', stagingBody({ name: 'production' }));
+      expect(res.statusCode, res.body).toBe(422);
+      expect(fieldError(res.body, 'name')).toBeTruthy();
+      expect((await repo.getEnv(stagingId))!.name).toBe('staging');
+    });
+
     it('answers 422 on the services field when a rolling service has no healthcheck', async () => {
       inspected = [{ name: 'web', hasHealthcheck: false, hostPorts: [] }];
       const res = await post('/settings/env', stagingBody({ branch: 'release' }));
@@ -718,6 +853,16 @@ describe('UI routes', () => {
       expect((await repo.getEnv(prodId))!.dbMarkerId).toBe(PROD_MARKER);
     });
 
+    it('renders the bind failure message escaped exactly once', async () => {
+      markers.shop = { envId: STAGING_MARKER, envName: 'R&D <x>' };
+      const res = await post(`/settings/env/${prodId}/bind`);
+      expect(res.body).toContain('data-ok="false"');
+      const text = /data-testid="bind-result"[^>]*>([\s\S]*?)<\/div>/.exec(res.body)?.[1];
+      expect(text).toContain('R&amp;D &lt;x&gt;');
+      expect(text).not.toContain('&amp;amp;');
+      expect(text).not.toContain('&amp;lt;');
+    });
+
     it('writes a fresh marker for a database without one and stores it on the env', async () => {
       delete markers['shop-staging'];
       const res = await post(`/settings/env/${stagingId}/bind`);
@@ -749,7 +894,9 @@ describe('UI routes', () => {
       const res = await post('/settings/servers', { name: 'edge', proxy_mode: 'bundled' });
       expect(res.statusCode).toBe(200);
       const token = testText(res.body, 'agent-token')!;
-      expect(testText(res.body, 'agent-command')).toContain(`microrun agent --url http://microrun.test --token ${token}`);
+      const command = testText(res.body, 'agent-command')!;
+      expect(command).toContain(`MICRORUN_AGENT_TOKEN=${token} microrun agent --url http://microrun.test`);
+      expect(command).not.toContain('--token');
       const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
       expect(edge).toMatchObject({ builtin: false, proxyMode: 'bundled', agentTokenHash: hashToken(token) });
     });
@@ -778,6 +925,43 @@ describe('UI routes', () => {
       expect(hashToken(token)).not.toBe(edge.agentTokenHash);
       expect((await post(`/settings/servers/${serverId}/token`)).statusCode).toBe(404);
       expect((await post('/settings/servers/nope/token')).statusCode).toBe(404);
+    });
+
+    it('reissuing a token disconnects the agent holding the old one and shows the token only in the env-var command', async () => {
+      await post('/settings/servers', { name: 'edge' });
+      const edge = (await repo.listServers()).find((s) => s.name === 'edge')!;
+      const socket = fakeSocket();
+      hub.attachSocket(edge.id, socket, { agentVersion: '1.0.0' });
+      expect(hub.isOnline(edge.id)).toBe(true);
+      const res = await post(`/settings/servers/${edge.id}/token`);
+      expect(res.statusCode).toBe(200);
+      expect(socket.closed).toBe(true);
+      expect(hub.isOnline(edge.id)).toBe(false);
+      const token = testText(res.body, 'agent-token')!;
+      const command = testText(res.body, 'agent-command')!;
+      expect(command).toContain(`MICRORUN_AGENT_TOKEN=${token} microrun agent --url http://microrun.test`);
+      expect(command).not.toContain('--token');
+    });
+
+    it('answers 422 with a server-error and creates nothing for a duplicate server name', async () => {
+      const res = await post('/settings/servers', { name: 'main' });
+      expect(res.statusCode, res.body).toBe(422);
+      expect(res.body).toContain('data-testid="server-error"');
+      expect(res.body).not.toContain('data-testid="agent-token"');
+      const message = /data-testid="server-error"[^>]*>([\s\S]*?)<\/div>/.exec(res.body)?.[1]?.replace(/<[^>]+>/g, '').trim();
+      expect(message).toBeTruthy();
+      expect(message).not.toMatch(keyShaped);
+      expect(await repo.listServers()).toHaveLength(1);
+    });
+
+    it('changes the proxy mode of any server, the builtin one included', async () => {
+      expect((await get('/settings/servers')).body).toContain(`action="/settings/servers/${serverId}/proxy"`);
+      const res = await post(`/settings/servers/${serverId}/proxy`, { proxy_mode: 'bundled' });
+      expect(res.statusCode).toBe(200);
+      expect((await repo.getServer(serverId))!.proxyMode).toBe('bundled');
+      await post(`/settings/servers/${serverId}/proxy`, { proxy_mode: 'weird' });
+      expect((await repo.getServer(serverId))!.proxyMode).toBe('bundled');
+      expect((await post('/settings/servers/nope/proxy', { proxy_mode: 'bundled' })).statusCode).toBe(404);
     });
   });
 
@@ -821,6 +1005,28 @@ describe('UI routes', () => {
       expect(rows).toContain(codeMessage(en, 'SCHEMA_DESTRUCTIVE', { objects: 'users', col: 'users' }));
       expect(rowCount((await get('/history')).body)).toBe(2);
     });
+
+    it('shows the mismatch and expected → deleted per rule of a succeeded cleanup', async () => {
+      applyOut = '{"rule":"orphans","deleted":1}\n{"rule":"tags","deleted":1}\n';
+      await rolledBack();
+      const res = await post('/cleanup/apply', [['releaseId', (await release(B)).id], ['rules', 'orphans'], ['rules', 'tags']]);
+      expect(res.statusCode, res.body).toBe(200);
+      const apply = (await ops()).find((o) => o.kind === 'cleanup' && o.params?.mode === 'apply')!;
+      expect(await settle(apply.id)).toMatchObject({ status: 'succeeded', code: 'CLEANUP_MISMATCH' });
+      const rows = tbody((await get('/history')).body);
+      expect(rows).toContain(codeMessage(en, 'CLEANUP_MISMATCH', { expected: 3, deleted: 2 }));
+      expect(rows).toContain(en.t('cl.result', { rule: 'orphans', p: en.num(2), a: en.num(1) }));
+      expect(rows).toContain(en.t('cl.result', { rule: 'tags', p: en.num(1), a: en.num(1) }));
+    });
+
+    it('lists the approval of a destructive change as an approve operation', async () => {
+      await destructiveRejection();
+      expect((await post('/approve', { envId: prodId, commitSha: B, confirm: 'production' })).statusCode).toBe(200);
+      const body = (await get('/history')).body;
+      expect(en.t('kind.approve')).not.toBe('kind.approve');
+      expect(tbody(body)).toContain(en.t('kind.approve'));
+      expect(rowCount(body)).toBe(3);
+    });
   });
 
   describe('pages and /lang', () => {
@@ -834,6 +1040,26 @@ describe('UI routes', () => {
       expect((await get('/env/nope')).statusCode).toBe(404);
       expect((await get('/panel/nope')).statusCode).toBe(404);
       expect((await get('/settings/env/nope')).statusCode).toBe(404);
+    });
+
+    it('warns on the board card and the panel when an active release image is not stored', async () => {
+      await deploy(A);
+      const relA = await release(A);
+      const warn = en.t('storage.failedWarn');
+      expect((await get('/')).body).not.toContain(warn);
+      await db('releases').where({ id: relA.id }).update({ stored: 0 });
+      expect((await get('/')).body).toContain(warn);
+      expect((await get(`/panel/${relA.id}`)).body).toContain(warn);
+    });
+
+    it('reads at most 200 operations per env to render the board and a panel', async () => {
+      await deploy(A);
+      const spy = vi.spyOn(repo, 'listOperations');
+      await get('/');
+      await get(`/panel/${(await release(A)).id}`);
+      expect(spy).toHaveBeenCalled();
+      for (const [f] of spy.mock.calls) expect(f.limit).toBeLessThanOrEqual(200);
+      spy.mockRestore();
     });
 
     it('prefills the env form from the stored env', async () => {

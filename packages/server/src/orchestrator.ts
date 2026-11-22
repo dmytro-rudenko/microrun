@@ -27,7 +27,7 @@ import type {
   ServiceSpec,
   StorageConfig,
 } from '@microrun/core/protocol';
-import { codeMessage, i18n } from '@microrun/core/i18n';
+import { codePlain, i18n } from '@microrun/core/i18n';
 import { BusyError } from './db/repo.ts';
 import type { EnvRow, OperationRow, OperationStatus, ReleaseRow, Repo } from './db/repo.ts';
 
@@ -56,7 +56,7 @@ class Stop extends Error {
 }
 
 const en = i18n('en');
-const message = (code: ResultCode, params: Params) => codeMessage(en, code, params);
+const message = (code: ResultCode, params: Params) => codePlain(en, code, params);
 const rejected = (code: ResultCode, params: Params = {}): { rejected: ApiError } => ({
   rejected: { code, message: message(code, params), params },
 });
@@ -69,6 +69,15 @@ const refs = (images: Images) => Object.fromEntries(Object.entries(images).map((
 const compose = (env: EnvRow): ComposeRef => ({ project: env.composeProject, dir: env.composeDir, files: env.composeFiles });
 const dbRef = (env: EnvRow, service: string): DbRef => ({ compose: compose(env), service, dbKind: env.dbKind, dbUrlEnv: env.dbUrlEnv });
 const drops = (d: DiffEntry[]) => d.filter((e) => e.kind === 'drop');
+const reasonOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const LOG_TAIL = 8000;
+
+function ownSchema(env: EnvRow, s: SchemaSnapshot): SchemaSnapshot {
+  const skip = new Set(env.migrationTables);
+  return s.kind === 'sql'
+    ? { ...s, tables: s.tables.filter((t) => !skip.has(t.name)) }
+    : { ...s, collections: s.collections.filter((c) => !skip.has(c.name)) };
+}
 
 function serviceImages(env: EnvRow, given: Record<string, string>): Record<string, string> | null {
   const names = env.services.map((s) => s.name);
@@ -93,8 +102,22 @@ export class Orchestrator {
     return this.d.clock();
   }
 
-  private call<T extends Command['type']>(env: EnvRow, opId: string, step: string, cmd: CommandOf<T>): Promise<ResultMap[T]> {
-    return this.d.agent.call(env.serverId, { opId, step }, cmd);
+  private async call<T extends Command['type']>(env: EnvRow, opId: string, step: string, cmd: CommandOf<T>): Promise<ResultMap[T]> {
+    try {
+      return await this.d.agent.call(env.serverId, { opId, step }, cmd);
+    } catch (e) {
+      throw e instanceof AgentError ? e : new AgentError('AGENT_ERROR', { reason: reasonOf(e) });
+    }
+  }
+
+  private async snapshot(env: EnvRow, opId: string, step: string): Promise<{ snapshot: SchemaSnapshot }> {
+    const res = await this.call(env, opId, step, { type: 'snapshotSchema', db: dbRef(env, env.migrationService) });
+    return { snapshot: ownSchema(env, res.snapshot) };
+  }
+
+  private async commandFailed(opId: string, res: ResultMap['runCommand'], code: ResultCode): Promise<Stop> {
+    if (res.log) await this.log(opId, res.log.slice(-LOG_TAIL));
+    return new Stop(code, { exitCode: res.exitCode });
   }
 
   private start(opId: string) {
@@ -228,6 +251,8 @@ export class Orchestrator {
   }
 
   async approveDestructive(envId: string, commitSha: string): Promise<void> {
+    const env = await this.repo.getEnv(envId);
+    if (!env) throw new Error(`no env ${envId}`);
     const rs = await this.repo.listReleases(envId);
     const rel = rs.find((r) => r.commitSha === commitSha);
     if (!rel) throw new Error(`no release ${commitSha} in env ${envId}`);
@@ -235,10 +260,18 @@ export class Orchestrator {
     const op = ops.find((o) => o.kind === 'deploy' && o.status === 'rejected' && o.code === 'SCHEMA_DESTRUCTIVE' && o.toReleaseId === rel.id);
     if (!op) throw new Error(`no SCHEMA_DESTRUCTIVE rejection for ${commitSha}`);
     const diff = drops((op.params?.diff as DiffEntry[] | undefined) ?? []);
-    await this.repo.putApproval({ envId, commitSha, diff, approvedAt: this.now() });
+    const now = this.now();
+    await this.repo.tx(async (r) => {
+      await r.putApproval({ envId, commitSha, diff, approvedAt: now });
+      const approve = await r.createOperation({
+        envId, kind: 'approve', fromReleaseId: null, toReleaseId: rel.id, actor: 'admin', status: 'succeeded',
+        params: { env: env.name, sha: sha7(commitSha), commit: commitSha }, startedAt: now,
+      });
+      await r.updateOperation(approve.id, { finishedAt: now });
+    });
   }
 
-  async closeWindow(releaseId: string): Promise<{ operationId: string }> {
+  async closeWindow(releaseId: string): Promise<Accepted> {
     const rel = await this.repo.getRelease(releaseId);
     if (!rel) throw new Error(`no release ${releaseId}`);
     const env = (await this.repo.getEnv(rel.envId))!;
@@ -248,16 +281,31 @@ export class Orchestrator {
     const expire = windowToClose(rs, rel.id);
     const after = applyPatches(rs, expire.map((id) => ({ id, patch: { state: 'expired' } })));
     const contract = env.contractCmd && rel.contractedAt === null && nextContract(after) === rel.id;
-    const op = await this.repo.tx(async (r) => {
-      await r.patchReleases(expire.map((id) => ({ id, patch: { state: 'expired' as const } })));
-      return r.createOperation({
-        envId: env.id, kind: contract ? 'contract' : 'expire', fromReleaseId: rel.id, toReleaseId: rel.id, actor: 'admin',
-        status: contract ? 'pending' : 'succeeded', params: base, startedAt: now,
+    try {
+      const op = await this.repo.tx(async (r) => {
+        await r.patchReleases(expire.map((id) => ({ id, patch: { state: 'expired' as const } })));
+        return r.createOperation({
+          envId: env.id, kind: contract ? 'contract' : 'expire', fromReleaseId: rel.id, toReleaseId: rel.id, actor: 'admin',
+          status: 'pending', params: base, startedAt: now,
+        });
       });
+      this.start(op.id);
+      return { operationId: op.id };
+    } catch (e) {
+      if (e instanceof BusyError) return rejected('ENV_BUSY', base);
+      throw e;
+    }
+  }
+
+  async runContract(releaseId: string): Promise<void> {
+    const rel = await this.repo.getRelease(releaseId);
+    const env = rel && (await this.repo.getEnv(rel.envId));
+    if (!rel || !env?.contractCmd) throw new Error(`no contract to run for release ${releaseId}`);
+    const op = await this.repo.createOperation({
+      envId: env.id, kind: 'contract', fromReleaseId: rel.id, toReleaseId: rel.id, actor: 'system', status: 'pending',
+      params: { env: env.name, sha: sha7(rel.commitSha) }, startedAt: this.now(),
     });
-    if (contract) this.start(op.id);
-    else await this.finish(op, 'succeeded', null, {});
-    return { operationId: op.id };
+    await this.run(op.id);
   }
 
   async retryContract(envId: string): Promise<Accepted> {
@@ -307,7 +355,7 @@ export class Orchestrator {
       if (op.kind === 'deploy') await this.runDeploy(op, env);
       else if (op.kind === 'rollback') await this.runRollback(op, env);
       else if (op.kind === 'cleanup') await this.runCleanup(op, env);
-      else if (op.kind === 'contract') await this.runContract(op, env);
+      else if (op.kind === 'contract') await this.executeContract(op, env);
       else await this.finish(op, 'succeeded', null, {});
     } catch (e) {
       await this.fail(op, e);
@@ -378,7 +426,9 @@ export class Orchestrator {
   private async runDeploy(op: OperationRow, env: EnvRow): Promise<void> {
     const { step, once } = this.stepper(op);
     let rel = (await this.repo.getRelease(op.toReleaseId!))!;
-    const reactivate = rel.state === 'available';
+    const activated = 'activate' in op.stepsDone;
+    const plan = (op.stepsDone.plan as { reactivate: boolean } | undefined) ?? { reactivate: rel.state === 'available' };
+    if (!('plan' in op.stepsDone)) await this.repo.markStepDone(op.id, 'plan', plan);
 
     const pulled = await step('pull', async () =>
       this.call(env, op.id, 'pull', { type: 'pullImages', refs: [...new Set(Object.values(rel.images).map((i) => i.ref))] }),
@@ -390,23 +440,25 @@ export class Orchestrator {
 
     await step('markers', async () => this.checkMarkers(op, env));
 
-    const approved = reactivate ? false : await this.migrate(op, env, rel, images, step);
+    if (!activated) {
+      const approved = plan.reactivate ? false : await this.migrate(op, env, rel, images, step);
 
-    const { services, proxyMode } = await this.services(env, images);
-    await step('switch', async () =>
-      this.call(env, op.id, 'switch', { type: 'switchServices', compose: compose(env), services, healthTimeoutS: env.healthTimeoutS, proxyMode }),
-    );
+      const { services, proxyMode } = await this.services(env, images);
+      await step('switch', async () =>
+        this.call(env, op.id, 'switch', { type: 'switchServices', compose: compose(env), services, healthTimeoutS: env.healthTimeoutS, proxyMode }),
+      );
 
-    await once('activate', async (r) => {
-      const rs = await r.listReleases(env.id);
-      const patches: { id: string; patch: Partial<ReleaseRow> }[] = onDeploySuccess(rs, rel.id, this.now());
-      if (approved) {
-        patches.push({ id: rel.id, patch: { destructiveApproved: true } });
-        const expire = onDestructiveApproved(applyPatches(rs, patches));
-        patches.push(...expire.map((id) => ({ id, patch: { state: 'expired' as const } })));
-      }
-      await r.patchReleases(patches);
-    });
+      await once('activate', async (r) => {
+        const rs = await r.listReleases(env.id);
+        const patches: { id: string; patch: Partial<ReleaseRow> }[] = onDeploySuccess(rs, rel.id, this.now());
+        if (approved) {
+          patches.push({ id: rel.id, patch: { destructiveApproved: true } });
+          const expire = onDestructiveApproved(applyPatches(rs, patches));
+          patches.push(...expire.map((id) => ({ id, patch: { state: 'expired' as const } })));
+        }
+        await r.patchReleases(patches);
+      });
+    }
 
     rel = (await this.repo.getRelease(rel.id))!;
     await step('store', async () => this.storeRelease(op, env, rel, images));
@@ -421,7 +473,7 @@ export class Orchestrator {
     const active = (await this.repo.listReleases(env.id)).find((r) => r.state === 'active' && r.id !== rel.id);
     const base: SchemaSnapshot = active && !('baseline' in op.stepsDone)
       ? (active.schemaSnapshot as SchemaSnapshot)
-      : (await step('baseline', async () => this.call(env, op.id, 'baseline', { type: 'snapshotSchema', db }))).snapshot;
+      : (await step('baseline', async () => this.snapshot(env, op.id, 'baseline'))).snapshot;
 
     let approved = false;
     if (env.schemaCheck === 'dry_run') {
@@ -437,11 +489,11 @@ export class Orchestrator {
       const res = await this.call(env, op.id, 'expand', {
         type: 'runCommand', compose: compose(env), service: env.migrationService, image: migImage, cmd: env.expandCmd, args: [], env: migEnv,
       });
-      if (res.exitCode !== 0) throw new Stop('MIGRATION_FAILED', { exitCode: res.exitCode });
+      if (res.exitCode !== 0) throw await this.commandFailed(op.id, res, 'MIGRATION_FAILED');
       return { exitCode: res.exitCode };
     });
 
-    const after = (await step('snapshot', async () => this.call(env, op.id, 'snapshot', { type: 'snapshotSchema', db }))).snapshot;
+    const after = (await step('snapshot', async () => this.snapshot(env, op.id, 'snapshot'))).snapshot;
     const diff = diffSchema(base, after);
     await this.repo.patchReleases([{ id: rel.id, patch: { schemaSnapshot: after, schemaDiff: diff } }]);
     if (env.schemaCheck === 'post_check') approved = await this.gate(op, env, rel.commitSha, diff);
@@ -495,6 +547,7 @@ export class Orchestrator {
     await step('fetch', async () =>
       this.call(env, op.id, 'fetch', {
         type: 'fetchImages', storage: this.d.decryptStorage(env), env: env.name, sha: target.commitSha, images: refs(target.images),
+        digests: Object.fromEntries(Object.entries(target.images).filter(([, i]) => i.digest).map(([s, i]) => [s, i.digest])),
       }),
     );
     const { services, proxyMode } = await this.services(env, target.images);
@@ -544,7 +597,7 @@ export class Orchestrator {
         type: 'runCommand', compose: compose(env), service: env.migrationService, image: imageOf(rel.images[env.migrationService]!),
         cmd: env.cleanupCmd!, args, env: { ...this.releaseEnv(env, rel), MICRORUN_ROLLED_BACK_AT: iso(rel.blockedAt ?? 0) },
       });
-      if (out.exitCode !== 0) throw new Stop('MIGRATION_FAILED', { exitCode: out.exitCode });
+      if (out.exitCode !== 0) throw await this.commandFailed(op.id, out, 'MIGRATION_FAILED');
       return out;
     });
     const parsed = parseCleanupLines(res.stdout, apply ? 'apply' : 'dry-run');
@@ -578,7 +631,7 @@ export class Orchestrator {
     await this.finish(op, 'succeeded', null, {});
   }
 
-  private async runContract(op: OperationRow, env: EnvRow): Promise<void> {
+  private async executeContract(op: OperationRow, env: EnvRow): Promise<void> {
     const { step } = this.stepper(op);
     const rel = (await this.repo.getRelease(op.toReleaseId!))!;
     try {
@@ -587,7 +640,7 @@ export class Orchestrator {
           type: 'runCommand', compose: compose(env), service: env.migrationService, image: imageOf(rel.images[env.migrationService]!),
           cmd: env.contractCmd!, args: [], env: this.releaseEnv(env, rel),
         });
-        if (out.exitCode !== 0) throw new Stop('CONTRACT_FAILED', { exitCode: out.exitCode });
+        if (out.exitCode !== 0) throw await this.commandFailed(op.id, out, 'CONTRACT_FAILED');
         return { exitCode: out.exitCode };
       });
     } catch (e) {

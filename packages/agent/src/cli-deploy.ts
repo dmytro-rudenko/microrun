@@ -12,6 +12,7 @@ export interface DeployDeps {
 }
 
 const RETRY_MS = 10_000;
+const STREAM_RECONNECTS = 5;
 const DEFAULT_BUSY_TIMEOUT_S = 600;
 
 const defaultGit = (args: string[]) =>
@@ -115,13 +116,18 @@ function doneResult(ctx: Ctx, e: Extract<OperationEvent, { type: 'done' }>): num
   return rejected ? 2 : 1;
 }
 
-async function streamOperation(ctx: Ctx, operationId: string): Promise<number> {
+async function readOnce(ctx: Ctx, operationId: string, first: boolean): Promise<number | 'closed'> {
   let result: number | undefined;
+  let res: Response;
   try {
-    const res = await ctx.fetch(`${ctx.url}/api/v1/operations/${operationId}/events`, {
+    res = await ctx.fetch(`${ctx.url}/api/v1/operations/${operationId}/events`, {
       headers: { ...ctx.headers, accept: 'text/event-stream' },
     });
-    if (!res.ok || !res.body) return unreachable(ctx);
+  } catch {
+    return first ? unreachable(ctx) : 'closed';
+  }
+  if (!res.ok || !res.body) return first ? unreachable(ctx) : 'closed';
+  try {
     await readEvents(res.body, (e) => {
       if (e.type === 'done') {
         result = doneResult(ctx, e);
@@ -132,13 +138,20 @@ async function streamOperation(ctx: Ctx, operationId: string): Promise<number> {
       return false;
     });
   } catch {
-    return unreachable(ctx);
+    return result ?? 'closed';
   }
-  if (result === undefined) {
-    ctx.err(ctx.t('cli.streamClosed', { op: operationId }));
-    return 3;
+  return result ?? 'closed';
+}
+
+async function streamOperation(ctx: Ctx, operationId: string, sleep: (ms: number) => Promise<void>): Promise<number> {
+  for (let attempt = 0; ; attempt++) {
+    const r = await readOnce(ctx, operationId, attempt === 0);
+    if (r !== 'closed') return r;
+    if (attempt >= STREAM_RECONNECTS) break;
+    await sleep(1000 * 2 ** attempt);
   }
-  return result;
+  ctx.err(ctx.t('cli.streamClosed', { op: operationId }));
+  return 3;
 }
 
 function answerCode(ctx: Ctx, status: number, body: Partial<ApiError> | null): number {
@@ -160,7 +173,7 @@ async function postDeploy(ctx: Ctx, payload: string, busyTimeoutS: number, sleep
     } catch {
       return unreachable(ctx);
     }
-    if (res.status === 202) return streamOperation(ctx, ((await res.json()) as DeployAccepted).operationId);
+    if (res.status === 202) return streamOperation(ctx, ((await res.json()) as DeployAccepted).operationId, sleep);
     const body = (await res.json().catch(() => null)) as Partial<ApiError> | null;
     if (res.status === 200 && body?.code === 'ALREADY_ACTIVE') {
       ctx.out(ctx.t('cli.done.ok'));

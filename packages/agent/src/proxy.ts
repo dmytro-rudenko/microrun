@@ -15,6 +15,43 @@ async function must(args: string[]): Promise<string> {
   return r.stdout;
 }
 
+async function ensureNetwork(name: string): Promise<void> {
+  if ((await docker(['network', 'inspect', name])).code === 0) return;
+  const r = await docker(['network', 'create', name]);
+  if (r.code !== 0 && !r.stderr.includes('already exists')) throw new Error(`docker network create failed: ${r.stderr.trim()}`);
+}
+
+async function connect(network: string, container: string): Promise<void> {
+  const r = await docker(['network', 'connect', network, container]);
+  if (r.code !== 0 && !r.stderr.includes('already exists')) throw new Error(`docker network connect failed: ${r.stderr.trim()}`);
+}
+
+async function networkOf(container: string): Promise<string> {
+  const r = await docker(['inspect', '--format', '{{index .Config.Labels "com.docker.compose.project"}}', container]);
+  const project = r.code === 0 ? r.stdout.trim() : '';
+  return project && project !== '<no value>' ? `${NAME}-${project}` : NAME;
+}
+
+async function attach(containers: string[]): Promise<void> {
+  for (const c of containers) {
+    const net = await networkOf(c);
+    if (net !== NAME) {
+      await ensureNetwork(net);
+      await connect(net, NAME);
+    }
+    await connect(net, c);
+  }
+}
+
+function serial() {
+  let chain: Promise<unknown> = Promise.resolve();
+  return <T>(task: () => Promise<T>): Promise<T> => {
+    const next = chain.then(task, task);
+    chain = next.catch(() => {});
+    return next;
+  };
+}
+
 export function bundledProxy(
   stateDir: string,
   opts: BundledProxyOptions = {},
@@ -56,11 +93,10 @@ export function bundledProxy(
     throw new Error(`caddy reload failed: ${last}`);
   }
 
+  const queue = serial();
+
   async function ensure(): Promise<void> {
-    if ((await docker(['network', 'inspect', NAME])).code !== 0) {
-      const r = await docker(['network', 'create', NAME]);
-      if (r.code !== 0 && !r.stderr.includes('already exists')) throw new Error(`docker network create failed: ${r.stderr.trim()}`);
-    }
+    await ensureNetwork(NAME);
     const state = await docker(['inspect', '--format', '{{.State.Running}}', NAME]);
     if (state.code === 0) {
       if (state.stdout.trim() !== 'true') await must(['start', NAME]);
@@ -79,10 +115,7 @@ export function bundledProxy(
 
   async function addUpstreams(svc: ServiceSpec, containers: string[]): Promise<void> {
     if (!svc.domain || !svc.port) return;
-    for (const c of containers) {
-      const r = await docker(['network', 'connect', NAME, c]);
-      if (r.code !== 0 && !r.stderr.includes('already exists')) throw new Error(`docker network connect failed: ${r.stderr.trim()}`);
-    }
+    await attach(containers);
     const ups = table[svc.domain] ?? [];
     for (const c of containers) {
       const up = `${c}:${svc.port}`;
@@ -103,5 +136,10 @@ export function bundledProxy(
     await reload();
   }
 
-  return { ensure, addUpstreams, removeUpstreams, routes: () => structuredClone(table) };
+  return {
+    ensure: () => queue(ensure),
+    addUpstreams: (svc, containers) => queue(() => addUpstreams(svc, containers)),
+    removeUpstreams: (svc, containers) => queue(() => removeUpstreams(svc, containers)),
+    routes: () => structuredClone(table),
+  };
 }

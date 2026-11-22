@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest';
-import { LANGS, LANG_NAMES, allKeys, codeMessage, fromEnvLocale, i18n, isLang, negotiate } from './index.ts';
+import { LANGS, LANG_NAMES, allKeys, codeMessage, codePlain, fromEnvLocale, i18n, isLang, negotiate } from './index.ts';
 
 describe('isLang and LANG_NAMES', () => {
   test('LANGS lists the eight supported languages in order', () => {
@@ -99,6 +99,21 @@ describe('t', () => {
   test('all five special characters are escaped', () => {
     const out = i18n('en').t('cli.step', { step: `&<>"'` });
     expect(out).toBe('&amp;&lt;&gt;&quot;&#39;…');
+  });
+
+  test('text substitutes params without HTML-escaping them', () => {
+    const en = i18n('en');
+    expect(en.text('cli.step', { step: `&<>"'` })).toBe(`&<>"'…`);
+    expect(en.text('codes.BRANCH_MISMATCH', { branch: "fix/o'neil&co", env: 'prod', expected: 'main' })).toBe(
+      "Branch fix/o'neil&co cannot be deployed to prod: this environment deploys main.",
+    );
+  });
+
+  test('text pluralises and formats n like t', () => {
+    for (const lang of LANGS) {
+      const i = i18n(lang);
+      for (const n of [1, 3, 5, 1234]) expect(i.text('env.available', { n })).toBe(i.t('env.available', { n }));
+    }
   });
 
   test('an unknown key returns the key itself', () => {
@@ -207,6 +222,39 @@ describe('codeMessage', () => {
   });
 });
 
+describe('codePlain', () => {
+  test('keeps quotes and ampersands of params as plain text', () => {
+    const en = i18n('en');
+    const m = codePlain(en, 'ENV_BUSY', { env: "o'neil & co" });
+    expect(m).toBe("o'neil & co is busy with another operation. Try again shortly.");
+    expect(codeMessage(en, 'ENV_BUSY', { env: "o'neil & co" })).toContain('o&#39;neil &amp; co');
+  });
+
+  test('formats a numeric at as a human date', () => {
+    const en = i18n('en');
+    const at = Date.UTC(2026, 10, 22, 12, 9);
+    expect(codePlain(en, 'COMMIT_BLOCKED', { sha: 'bbbbbbb', env: 'production', at })).toBe(
+      codeMessage(en, 'COMMIT_BLOCKED', { sha: 'bbbbbbb', env: 'production', at }),
+    );
+  });
+});
+
+describe('codes.AGENT_ERROR', () => {
+  test('en reads "The agent failed: {reason}"', () => {
+    expect(codePlain(i18n('en'), 'AGENT_ERROR', { reason: 'socket hang up' })).toBe('The agent failed: socket hang up');
+  });
+
+  test('every language has its own translation carrying the reason', () => {
+    const en = i18n('en').t('codes.AGENT_ERROR', { reason: 'R' });
+    for (const lang of LANGS) {
+      const out = i18n(lang).t('codes.AGENT_ERROR', { reason: 'R' });
+      expect(out).not.toBe('codes.AGENT_ERROR');
+      expect(out).toContain('R');
+      if (lang !== 'en') expect(out, lang).not.toBe(en);
+    }
+  });
+});
+
 describe('allKeys', () => {
   test('every language has exactly the keys of en', () => {
     const keys = allKeys();
@@ -214,9 +262,9 @@ describe('allKeys', () => {
     for (const lang of LANGS) expect([...keys[lang]].sort()).toEqual(en);
   });
 
-  test('en contains the 19 result codes, common and cli keys', () => {
+  test('en contains the 20 result codes, common and cli keys', () => {
     const en = allKeys().en;
-    expect(en.filter((k) => k.startsWith('codes.'))).toHaveLength(19);
+    expect(en.filter((k) => k.startsWith('codes.'))).toHaveLength(20);
     expect(en).toContain('codes.COMMIT_BLOCKED');
     for (const k of ['close', 'cancel', 'confirm', 'save', 'retry', 'yes', 'no']) expect(en).toContain(`common.${k}`);
     for (const k of ['cli.step', 'cli.done.ok', 'cli.done.failed', 'cli.done.rejected', 'cli.busy.wait', 'cli.unreachable', 'cli.usage']) {

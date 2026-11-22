@@ -45,12 +45,12 @@ async function labelOf(ref: string): Promise<string | null> {
   return r.code === 0 ? r.stdout.trim() : null;
 }
 
-async function buildSet(name: string): Promise<{ images: Record<string, string>; labels: Record<string, string> }> {
+async function buildSet(name: string, variant = ''): Promise<{ images: Record<string, string>; labels: Record<string, string> }> {
   const images: Record<string, string> = {};
   const labels: Record<string, string> = {};
   for (const svc of ['web', 'worker']) {
     const ref = `mrst-${id}-${name}:${svc}`;
-    const label = `${id}-${name}-${svc}`;
+    const label = `${id}-${name}-${svc}${variant}`;
     await dk(['build', '-q', '-t', ref, '--label', `mrst=${label}`, '-'], 'FROM busybox:1.36.1\n');
     images[svc] = ref;
     labels[svc] = label;
@@ -63,6 +63,12 @@ async function purge(images: Record<string, string>): Promise<void> {
     const r = await sh('docker', ['image', 'inspect', '-f', '{{.Id}}', ref]);
     if (r.code === 0) await dk(['rmi', '-f', r.stdout.trim()]);
   }
+}
+
+async function idsOf(images: Record<string, string>): Promise<Record<string, string>> {
+  const ids: Record<string, string> = {};
+  for (const [svc, ref] of Object.entries(images)) ids[svc] = (await dk(['image', 'inspect', '-f', '{{.Id}}', ref])).trim();
+  return ids;
 }
 
 async function expectLabels(images: Record<string, string>, labels: Record<string, string>): Promise<void> {
@@ -96,12 +102,13 @@ function s3Client(): S3Client {
   });
 }
 
-async function expectStorageFailed(p: Promise<unknown>, kind: string, secret?: string): Promise<void> {
+async function expectStorageFailed(p: Promise<unknown>, kind: string, secret?: string, reason?: string): Promise<void> {
   const err = await p.then(() => null, (e: unknown) => e);
   expect(err).toBeInstanceOf(AgentError);
   const e = err as AgentError;
   expect(e.code).toBe('STORAGE_FAILED');
   expect(e.params.kind).toBe(kind);
+  if (reason) expect(e.params.reason).toBe(reason);
   if (secret) {
     expect(e.message).not.toContain(secret);
     expect(JSON.stringify(e.params)).not.toContain(secret);
@@ -274,5 +281,120 @@ describe('s3 storage', () => {
     const err = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: key() })).then(() => null, (e: unknown) => e);
     client.destroy();
     expect((err as { $metadata?: { httpStatusCode?: number } } | null)?.$metadata?.httpStatusCode).toBe(404);
+  });
+});
+
+describe('digest verification on fetch', () => {
+  it('loads a local archive whose images match the given digests', async () => {
+    const cfg: StorageConfig = { kind: 'local', path: join(workDir, 'digest-ok') };
+    const set = await buildSet('digok');
+    const digests = await idsOf(set.images);
+    const sha = newSha();
+    await storeImages(cfg, env, sha, set.images);
+    await purge(set.images);
+
+    await fetchImages(cfg, env, sha, set.images, digests);
+    await expectLabels(set.images, set.labels);
+  });
+
+  it('rejects a tampered local archive under the same file name and removes the loaded images', async () => {
+    const cfg: StorageConfig = { kind: 'local', path: join(workDir, 'digest-bad') };
+    const set = await buildSet('digbad');
+    const digests = await idsOf(set.images);
+    const sha = newSha();
+    await storeImages(cfg, env, sha, set.images);
+    const evil = await buildSet('digbad', '-evil');
+    await storeImages(cfg, env, sha, evil.images);
+    await purge(evil.images);
+    await expectAbsent(set.images);
+
+    await expectStorageFailed(fetchImages(cfg, env, sha, set.images, digests), 'local', undefined, 'digest');
+    await expectAbsent(set.images);
+  });
+
+  it('accepts registry images whose digest matches and rejects a tag that was re-pushed with other content', async () => {
+    const cfg: StorageConfig = { kind: 'registry', registry: registryHost, repository: 'mrst/dig', username: '', password: '' };
+    const set = await buildSet('digreg');
+    const digests = await idsOf(set.images);
+    const good = newSha();
+    await storeImages(cfg, env, good, set.images);
+    await purge(set.images);
+    await fetchImages(cfg, env, good, set.images, digests);
+    await expectLabels(set.images, set.labels);
+
+    const bad = newSha();
+    await storeImages(cfg, env, bad, set.images);
+    const evil = await buildSet('digreg', '-evil');
+    for (const [svc, ref] of Object.entries(evil.images)) {
+      const remote = `${registryHost}/mrst/dig:${env}-${bad}-${svc}`;
+      await dk(['tag', ref, remote]);
+      await dk(['push', '-q', remote]);
+      await dk(['rmi', remote]);
+    }
+    await purge(evil.images);
+    await expectAbsent(set.images);
+
+    await expectStorageFailed(fetchImages(cfg, env, bad, set.images, digests), 'registry', undefined, 'digest');
+    await expectAbsent(set.images);
+  });
+});
+
+describe('environment names that are not valid image refs', () => {
+  const spaced = `My Env ${id}`;
+  const slugged = `my-env-${id}`;
+
+  it('stores and fetches a local archive under the slugged env directory', async () => {
+    const cfg: StorageConfig = { kind: 'local', path: join(workDir, 'slug') };
+    const set = await buildSet('slugloc');
+    const sha = newSha();
+    await storeImages(cfg, spaced, sha, set.images);
+    expect((await stat(join(workDir, 'slug', slugged, `${sha}.tar.gz`))).isFile()).toBe(true);
+
+    await purge(set.images);
+    await fetchImages(cfg, spaced, sha, set.images);
+    await expectLabels(set.images, set.labels);
+
+    await deleteImages(cfg, spaced, sha, set.images);
+    await expect(stat(join(workDir, 'slug', slugged, `${sha}.tar.gz`))).rejects.toThrow();
+  });
+
+  it('pins under microrun-pin/<slug> and deletes those pins', async () => {
+    const cfg: StorageConfig = { kind: 'local', path: join(workDir, 'slugpin') };
+    const set = await buildSet('slugpin');
+    const sha = newSha();
+    await pinImages(` Prod/EU ${id} `, sha, set.images);
+    const pins = Object.keys(set.images).map((svc) => `microrun-pin/prod-eu-${id}:${sha.slice(0, 12)}-${svc}`);
+    for (const [i, pin] of pins.entries()) expect(await labelOf(pin)).toBe(Object.values(set.labels)[i]);
+
+    await deleteImages(cfg, ` Prod/EU ${id} `, sha, set.images);
+    for (const pin of pins) expect(await labelOf(pin)).toBeNull();
+  });
+
+  it('pushes registry tags with the slugged env and pulls them back', async () => {
+    const cfg: StorageConfig = { kind: 'registry', registry: registryHost, repository: 'mrst/slug', username: '', password: '' };
+    const set = await buildSet('slugreg');
+    const sha = newSha();
+    await storeImages(cfg, spaced, sha, set.images);
+    const tags = (await (await fetch(`http://${registryHost}/v2/mrst/slug/tags/list`)).json()) as { tags: string[] };
+    expect(tags.tags).toEqual(expect.arrayContaining([`${slugged}-${sha}-web`, `${slugged}-${sha}-worker`]));
+
+    await purge(set.images);
+    await fetchImages(cfg, spaced, sha, set.images);
+    await expectLabels(set.images, set.labels);
+  });
+
+  it('uploads the s3 object under the slugged env key', async () => {
+    const cfg: StorageConfig = {
+      kind: 's3', endpoint: minioEndpoint, region: 'us-east-1', bucket, prefix: 'releases',
+      accessKey: minioUser, secretKey: minioPass, forcePathStyle: true,
+    };
+    const set = await buildSet('slugs3');
+    const sha = newSha();
+    await storeImages(cfg, spaced, sha, set.images);
+    const client = s3Client();
+    const head = await client.send(new HeadObjectCommand({ Bucket: bucket, Key: `releases/${slugged}/${sha}.tar.gz` }))
+      .then((h) => h.ContentLength ?? 0, () => -1);
+    client.destroy();
+    expect(head).toBeGreaterThan(0);
   });
 });

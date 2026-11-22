@@ -22,13 +22,13 @@ const CLIENT_IMAGE: Record<DbKind, string> = {
   postgres: 'postgres:18-alpine',
   mysql: 'mysql:8.4',
   mongodb: 'mongo:8',
-  sqlite: 'keinos/sqlite3:3.50.4',
+  sqlite: 'keinos/sqlite3:3.50.4@sha256:7ea29f0c7e91a8c3f315e831459d07000f34e9e9b25fbc30be2e0481b3e0450f',
 };
 
 const CLIENT_CMD: Record<DbKind, string> = {
   postgres: 'psql "$MR_DB_URL" -X -q -A -t -v ON_ERROR_STOP=1',
   mysql: 'mysql -h "$MR_HOST" -P "$MR_PORT" -u "$MR_USER" -N -B -r "$MR_DB"',
-  mongodb: 'mongosh "$MR_DB_URL" --quiet --eval "$(cat)"',
+  mongodb: 'mongosh --nodb --quiet --eval "db = connect(process.env.MR_DB_URL); $(cat)"',
   sqlite: 'sqlite3 -batch -bail "$MR_DB_FILE"',
 };
 
@@ -128,8 +128,17 @@ function urlParts(url: string): { user: string; password: string; host: string; 
   };
 }
 
+function pgEnv(url: string, key: string): Record<string, string> {
+  const u = new URL(url);
+  const password = decodeURIComponent(u.password);
+  if (!password) return { [key]: url };
+  u.password = '';
+  return { [key]: u.toString(), PGPASSWORD: password };
+}
+
 function connEnv(t: Target): Record<string, string> {
   if (t.kind === 'sqlite') return { MR_DB_FILE: sqliteFile(t.url) };
+  if (t.kind === 'postgres') return pgEnv(t.url, 'MR_DB_URL');
   if (t.kind !== 'mysql') return { MR_DB_URL: t.url };
   const p = urlParts(t.url);
   return { MR_HOST: p.host, MR_PORT: p.port || '3306', MR_USER: p.user, MYSQL_PWD: p.password, MR_DB: p.db };
@@ -308,7 +317,7 @@ async function preparePostgres(src: Target, name: string, tables: string[]): Pro
   await startTemp(name, src.network, { POSTGRES_PASSWORD: DRYRUN_PASSWORD, POSTGRES_USER: user, POSTGRES_DB: dbName }, `postgres:${major}`);
   await waitReady(name, ['pg_isready', '-h', '127.0.0.1', '-U', user, '-d', dbName]);
   const load = 'psql -X -q -v ON_ERROR_STOP=1 -U "$MR_USER" -d "$MR_DB" -f';
-  const env = { MR_SRC: src.url, MR_USER: user, MR_DB: dbName };
+  const env = { ...pgEnv(src.url, 'MR_SRC'), MR_USER: user, MR_DB: dbName };
   await execIn(name, `pg_dump "$MR_SRC" --schema-only --no-owner --no-privileges -f /tmp/schema.sql && ${load} /tmp/schema.sql`,
     env, [], secrets(src.url));
   if (tables.length > 0) {
@@ -386,6 +395,7 @@ export async function dryRunExpand(
   const tables = effective.filter((t) => present.has(t));
   const redact = secrets(src.url);
   try {
+    await docker(['rm', '-f', '-v', name]);
     const tmp = src.kind === 'postgres' ? await preparePostgres(src, name, tables)
       : src.kind === 'mysql' ? await prepareMysql(src, name, tables)
         : src.kind === 'mongodb' ? await prepareMongo(src, name, tables)

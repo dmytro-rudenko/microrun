@@ -132,6 +132,37 @@ describe('login', () => {
     expect((await login(app, 'admin', PASSWORD, '10.0.0.9')).statusCode).toBe(429);
     expect((await login(app, 'admin', 'wrong-password-123', '10.0.0.10')).statusCode).toBe(401);
   });
+
+  it('limits attempts per IP and lowercased username, so another username from the same IP still gets through', async () => {
+    for (let i = 0; i < 5; i++) {
+      expect((await login(app, 'admin', 'wrong-password-123', '10.0.0.9')).statusCode).toBe(401);
+    }
+    expect((await login(app, 'ADMIN', PASSWORD, '10.0.0.9')).statusCode).toBe(429);
+    expect((await login(app, 'mallory', 'wrong-password-123', '10.0.0.9')).statusCode).toBe(401);
+  });
+});
+
+describe('login page language', () => {
+  beforeEach(async () => {
+    app = await build({ renderLogin: (p) => `<main>LOGIN lang=${p.lang}</main>` });
+  });
+
+  it.each([
+    ['the mr_lang cookie', { cookie: 'mr_lang=de', 'accept-language': 'fr' }, 'de'],
+    ['Accept-Language', { 'accept-language': 'fr-FR,fr;q=0.9' }, 'fr'],
+    ['Accept-Language over an unsupported cookie', { cookie: 'mr_lang=xx', 'accept-language': 'pl' }, 'pl'],
+    ['en by default', {}, 'en'],
+  ])('renders GET /login in the language of %s', async (_, headers, lang) => {
+    const res = await app.inject({ method: 'GET', url: '/login', headers });
+    expect(res.body).toContain(`LOGIN lang=${lang}`);
+  });
+
+  it('renders a failed POST /login in the negotiated language', async () => {
+    const f = form({ username: 'admin', password: 'wrong-password-123' });
+    const res = await app.inject({ method: 'POST', url: '/login', headers: { ...f.headers, 'accept-language': 'uk' }, payload: f.payload });
+    expect(res.statusCode).toBe(401);
+    expect(res.body).toContain('LOGIN lang=uk');
+  });
 });
 
 describe('login with https public URL', () => {
@@ -315,6 +346,11 @@ describe('loadConfig', () => {
     expect(c.dataDir).toBe('/data');
     expect(c.port).toBe(8080);
     expect(c.secureCookies).toBe(false);
+    expect(c.trustProxy).toBe(false);
+  });
+
+  it('reads MICRORUN_TRUST_PROXY', () => {
+    expect(loadConfig(env({ MICRORUN_TRUST_PROXY: '10.0.0.0/8' })).trustProxy).toBe('10.0.0.0/8');
   });
 
   it('reads MICRORUN_DATA_DIR and PORT, and https enables secure cookies', () => {

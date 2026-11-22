@@ -83,7 +83,7 @@ export interface NewRelease {
   cleanupPreview?: unknown;
 }
 
-export type OperationKind = 'deploy' | 'rollback' | 'cleanup' | 'contract' | 'expire';
+export type OperationKind = 'deploy' | 'rollback' | 'cleanup' | 'contract' | 'expire' | 'approve';
 export type OperationStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'rejected';
 
 export interface OperationRow {

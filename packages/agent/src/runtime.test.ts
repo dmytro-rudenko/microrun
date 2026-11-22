@@ -150,7 +150,7 @@ describe('createHandler command mapping', () => {
       .resolves.toEqual({ markers: [{ service: 'api', marker: { envId: 'e1', envName: 'staging' } }] });
   });
 
-  it('storeImages also pins the images', async () => {
+  it('storeImages pins the images first, then stores them', async () => {
     const stateDir = tmp();
     const events: string[] = [];
     const images = { api: 'registry/api:1' };
@@ -164,8 +164,22 @@ describe('createHandler command mapping', () => {
     });
     await expect(handler(key('store'), { type: 'storeImages', storage: { kind: 'local', path: '/var/microrun' }, env: 'prod', sha: 'abc1234', images }))
       .resolves.toEqual({});
-    expect(events).toContain('store:prod:abc1234');
-    expect(events).toContain('pin:prod:abc1234:registry/api:1');
+    expect(events).toEqual(['pin:prod:abc1234:registry/api:1', 'store:prod:abc1234']);
+  });
+
+  it('storeImages keeps the pin when the store fails and rethrows the store error', async () => {
+    const events: string[] = [];
+    const handler = createHandler({
+      stateDir: tmp(),
+      docker: fakeDocker().run,
+      layers: {
+        storeImages: async () => { throw new AgentError('STORAGE_FAILED', { kind: 'local' }); },
+        pinImages: async (env: string, sha: string) => { events.push(`pin:${env}:${sha}`); },
+      },
+    });
+    await expect(handler(key('store'), { type: 'storeImages', storage: { kind: 'local', path: '/var/microrun' }, env: 'prod', sha: 'abc1234', images: { api: 'registry/api:1' } }))
+      .rejects.toMatchObject({ code: 'STORAGE_FAILED' });
+    expect(events).toEqual(['pin:prod:abc1234']);
   });
 
   it('switchServices gets the ensured bundled proxy in bundled mode and none in external mode', async () => {
@@ -196,6 +210,36 @@ describe('createHandler command mapping', () => {
     await handler(key('sw2'), { type: 'switchServices', compose: compose(), services, healthTimeoutS: 60, proxyMode: 'external' });
     expect(events).toEqual(['switch:none']);
   });
+  it('reuses one bundled proxy per stateDir across switches, also when two envs switch concurrently', async () => {
+    const made: object[] = [];
+    const got: unknown[] = [];
+    const handler = createHandler({
+      stateDir: tmp(),
+      docker: fakeDocker().run,
+      layers: {
+        bundledProxy: () => {
+          const p = { ensure: async () => {}, addUpstreams: async () => {}, removeUpstreams: async () => {}, routes: () => ({}) };
+          made.push(p);
+          return p;
+        },
+        switchServices: async (_c: ComposeRef, services: ServiceSpec[], _t: number, p: unknown) => {
+          got.push(p);
+          return { replaced: services.map((s) => s.name) };
+        },
+      },
+    });
+    const services: ServiceSpec[] = [{ name: 'api', strategy: 'rolling', image: 'registry/api:2', domain: 'api.example.com', port: 8080 }];
+    const staging: ComposeRef = { project: 'app-staging', dir: '/srv/staging', files: ['docker-compose.yml'] };
+    const production: ComposeRef = { project: 'app-production', dir: '/srv/production', files: ['docker-compose.yml'] };
+    await Promise.all([
+      handler(key('sw-s'), { type: 'switchServices', compose: staging, services, healthTimeoutS: 60, proxyMode: 'bundled' }),
+      handler(key('sw-p'), { type: 'switchServices', compose: production, services, healthTimeoutS: 60, proxyMode: 'bundled' }),
+    ]);
+    await handler(key('sw-again'), { type: 'switchServices', compose: staging, services, healthTimeoutS: 60, proxyMode: 'bundled' });
+    expect(made).toHaveLength(1);
+    expect(got).toHaveLength(3);
+    expect(got.every((p) => p === made[0])).toBe(true);
+  });
 });
 
 describe('createHandler layer arguments', () => {
@@ -225,7 +269,7 @@ describe('createHandler layer arguments', () => {
       .resolves.toEqual({ snapshot, log: 'dry' });
     await expect(handler(key('r'), { type: 'runCommand', compose: compose(), service: 'api', image: 'img:1', cmd: 'migrate', args: ['--x'], env: { B: '2' } }))
       .resolves.toEqual({ exitCode: 3, stdout: 'out', log: 'log' });
-    await expect(handler(key('f'), { type: 'fetchImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' } })).resolves.toEqual({});
+    await expect(handler(key('f'), { type: 'fetchImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' }, digests: { api: 'registry/api@sha256:beef' } })).resolves.toEqual({});
     await expect(handler(key('x'), { type: 'deleteImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' } })).resolves.toEqual({});
     await expect(handler(key('i'), inspectCmd())).resolves.toEqual(envResult);
     expect(seen).toEqual([
@@ -233,10 +277,18 @@ describe('createHandler layer arguments', () => {
       ['snapshotSchema', [dbRef()]],
       ['dryRunExpand', [dbRef(), { image: 'img:1', cmd: 'migrate', migrationTables: ['m'], opId: 'op-9', env: { A: '1' } }]],
       ['runOneOff', [compose(), { service: 'api', image: 'img:1', cmd: 'migrate', args: ['--x'], env: { B: '2' } }]],
-      ['fetchImages', [storage, 'prod', 'abc', { api: 'img:1' }]],
+      ['fetchImages', [storage, 'prod', 'abc', { api: 'img:1' }, { api: 'registry/api@sha256:beef' }]],
       ['deleteImages', [storage, 'prod', 'abc', { api: 'img:1' }]],
       ['inspectEnv', [compose(), 'DATABASE_URL']],
     ]);
+  });
+
+  it('fetchImages without digests passes undefined as the digests argument', async () => {
+    const { seen, handler } = recording();
+    await handler(key('f'), { type: 'fetchImages', storage, env: 'prod', sha: 'abc', images: { api: 'img:1' } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]![1].slice(0, 4)).toEqual([storage, 'prod', 'abc', { api: 'img:1' }]);
+    expect(seen[0]![1][4]).toBeUndefined();
   });
 
   it('runs one layer call for two concurrent requests with the same opId:step', async () => {
@@ -282,11 +334,33 @@ describe('createHandler layer arguments', () => {
 });
 
 describe('createHandler pullImages', () => {
-  it('returns the image ID for a local image without RepoDigests and does not pull it', async () => {
+  it('pulls a tag that exists locally and returns the digest of the newly pulled image', async () => {
+    const d = fakeDocker({
+      local: { 'registry/app:main': { Id: 'sha256:0001', RepoDigests: ['registry/app@sha256:old'] } },
+      registry: { 'registry/app:main': { Id: 'sha256:0002', RepoDigests: ['registry/app@sha256:new'] } },
+    });
+    const handler = createHandler({ stateDir: tmp(), docker: d.run });
+    await expect(handler(key('pull'), { type: 'pullImages', refs: ['registry/app:main'] }))
+      .resolves.toEqual({ digests: { 'registry/app:main': 'registry/app@sha256:new' } });
+    expect(d.pulls()).toHaveLength(1);
+    expect(d.pulls()[0]).toContain('registry/app:main');
+  });
+
+  it('falls back to the local image ID when the pull of a locally built image fails', async () => {
     const d = fakeDocker({ local: { 'web:dev': { Id: 'sha256:1111', RepoDigests: [] } } });
     const handler = createHandler({ stateDir: tmp(), docker: d.run });
     await expect(handler(key('pull'), { type: 'pullImages', refs: ['web:dev'] }))
       .resolves.toEqual({ digests: { 'web:dev': 'sha256:1111' } });
+    expect(d.pulls()).toHaveLength(1);
+    expect(d.pulls()[0]).toContain('web:dev');
+  });
+
+  it('does not pull a @sha256-pinned ref that exists locally', async () => {
+    const ref = 'registry/api@sha256:beef';
+    const d = fakeDocker({ local: { [ref]: { Id: 'sha256:3333', RepoDigests: [ref] } } });
+    const handler = createHandler({ stateDir: tmp(), docker: d.run });
+    await expect(handler(key('pull'), { type: 'pullImages', refs: [ref] }))
+      .resolves.toEqual({ digests: { [ref]: ref } });
     expect(d.pulls()).toEqual([]);
   });
 
@@ -430,7 +504,7 @@ describe('runAgent', () => {
     await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'r2', ok: false, code: 'INVALID_REQUEST', params: { reason: 'bad ref' } });
   });
 
-  it('answers a malformed req and a plain thrown Error with INVALID_REQUEST, and ignores non-JSON frames', async () => {
+  it('answers a malformed req and a plain thrown Error with AGENT_ERROR, and ignores non-JSON frames', async () => {
     const { srv } = await start(async () => { throw new Error('disk full'); });
     const c = await srv.next();
     await c.messages.next();
@@ -438,7 +512,7 @@ describe('runAgent', () => {
     c.ws.send(JSON.stringify({ t: 'req', id: 'bad', key: { opId: 'op-1' }, cmd: { type: 'nope' } }));
     await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'bad', ok: false, code: 'INVALID_REQUEST', params: { reason: 'malformed request' } });
     c.ws.send(JSON.stringify({ t: 'req', id: 'r3', key: { opId: 'op-1', step: 's' }, cmd: { type: 'ping' } }));
-    await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'r3', ok: false, code: 'INVALID_REQUEST', params: { reason: 'disk full' }, message: 'disk full' });
+    await expect(c.messages.next()).resolves.toMatchObject({ t: 'res', id: 'r3', ok: false, code: 'AGENT_ERROR', params: { reason: 'disk full' }, message: 'disk full' });
   });
 
   it('strips trailing slashes from the server url', async () => {

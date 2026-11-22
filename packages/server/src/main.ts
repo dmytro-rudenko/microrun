@@ -34,7 +34,9 @@ export async function start(
   }
 
   const orchestrator = new Orchestrator({ repo, agent: hub, clock, decryptStorage, emit: (id, ev) => bus.emit(id, ev) });
-  const scheduler = new Scheduler({ repo, agent: hub, clock, decryptStorage, log: (l) => console.error(l) });
+  const scheduler = new Scheduler({
+    repo, agent: hub, clock, decryptStorage, runContract: (id) => orchestrator.runContract(id), log: (l) => console.error(l),
+  });
   const app = await buildApp({ config, repo, hub, orchestrator, scheduler, clock, bus });
 
   await orchestrator.resumeAll();

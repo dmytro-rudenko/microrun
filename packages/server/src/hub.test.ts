@@ -228,6 +228,56 @@ describe('Hub with a socket', () => {
   });
 });
 
+describe('Hub socket replacement and disconnect', () => {
+  let hub: Hub;
+  let statuses: [string, boolean][];
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    hub = new Hub({ repo, clock });
+    statuses = [];
+    hub.onStatus((id, online) => statuses.push([id, online]));
+  });
+
+  it('closes the previous socket with 4000 when a replacement attaches and stays online on it', async () => {
+    const first = new FakeSocket();
+    hub.attachSocket('srv-1', first, { agentVersion: '1.0.0' });
+    const second = new FakeSocket();
+    hub.attachSocket('srv-1', second, { agentVersion: '1.0.0' });
+
+    expect(first.closedWith).toBe(4000);
+    expect(second.closedWith).toBeNull();
+    expect(hub.isOnline('srv-1')).toBe(true);
+    expect(statuses).toEqual([['srv-1', true]]);
+
+    const p = hub.call('srv-1', key, { type: 'ping' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.reqs()).toEqual([]);
+    const [req] = second.reqs();
+    second.emitMessage({ t: 'res', id: req.id, ok: true, result: { agentVersion: '1.0.0' } });
+    await expect(p).resolves.toEqual({ agentVersion: '1.0.0' });
+  });
+
+  it('disconnect closes the live socket with 4003 and marks the server offline', async () => {
+    const sock = new FakeSocket();
+    hub.attachSocket('srv-1', sock, { agentVersion: '1.0.0' });
+
+    hub.disconnect('srv-1');
+
+    expect(sock.closedWith).toBe(4003);
+    expect(hub.isOnline('srv-1')).toBe(false);
+    expect(statuses).toEqual([['srv-1', true], ['srv-1', false]]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(sock.pings()).toBe(0);
+  });
+
+  it('disconnect of a server without a socket changes nothing', () => {
+    hub.disconnect('srv-x');
+    expect(hub.isOnline('srv-x')).toBe(false);
+    expect(statuses).toEqual([]);
+  });
+});
+
 describe('Hub with a local handler', () => {
   it('dispatches the call to the handler with key and command', async () => {
     const hub = new Hub({ repo, clock });
@@ -283,6 +333,21 @@ describe('registerAgentRoute', () => {
 
     expect(await closed).toBe(4001);
     expect(messages).toContainEqual({ t: 'bye', code: 'PROTOCOL_MISMATCH' });
+    expect(hub.isOnline(serverId)).toBe(false);
+  });
+
+  it('closes a connection that sends no hello within 10 s with 4002', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const ws = await connect();
+    let code: number | null = null;
+    ws.on('close', (c: number) => {
+      code = c;
+    });
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect(code).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.waitFor(() => expect(code).toBe(4002), { timeout: 1000 });
     expect(hub.isOnline(serverId)).toBe(false);
   });
 
