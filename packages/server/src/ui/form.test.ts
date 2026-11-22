@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest';
 import { esc, raw } from './html.ts';
-import { NAME_GATE, alert, button, checkbox, confirmName, input, select } from './form.ts';
+import { NAME_GATE, alert, button, checkbox, confirmName, field, input, select, textarea } from './form.ts';
 
 const EVIL = '<img src=x onerror=alert(1)>';
 const EVIL_ESCAPED = '&lt;img src=x onerror=alert(1)&gt;';
@@ -18,6 +18,49 @@ describe('input', () => {
 
   test('has no value attribute when value is omitted', () => {
     expect(input({ name: 'x' }).__html).not.toMatch(/\svalue=/);
+  });
+});
+
+describe('field', () => {
+  const control = raw('<input name="n" id="f">');
+  const CAPS = 'uppercase';
+
+  test('renders a label for the id with the label text, followed by the control', () => {
+    const out = field({ id: 'f', label: raw('Name'), control }).__html;
+    expect(out).toMatch(/<label for="f"[^>]*>Name<\/label><input name="n" id="f">/);
+  });
+
+  test('renders a hint paragraph only when a hint is given', () => {
+    expect(field({ id: 'f', label: raw('Name'), control, hint: raw('Lowercase only') }).__html).toMatch(/<p[^>]*>Lowercase only<\/p>/);
+    expect(field({ id: 'f', label: raw('Name'), control }).__html).not.toContain('<p');
+  });
+
+  test('renders an error paragraph only when an error is given', () => {
+    expect(field({ id: 'f', label: raw('Name'), control, error: raw('Required') }).__html).toMatch(/<p[^>]*text-prod[^>]*>Required<\/p>/);
+    expect(field({ id: 'f', label: raw('Name'), control }).__html).not.toContain('text-prod');
+  });
+
+  test('uses the caps label class only with caps:true', () => {
+    const label = (out: string) => /<label[^>]*>/.exec(out)?.[0] ?? '';
+    expect(label(field({ id: 'f', label: raw('Name'), control, caps: true }).__html)).toContain(CAPS);
+    expect(label(field({ id: 'f', label: raw('Name'), control }).__html)).not.toContain(CAPS);
+  });
+});
+
+describe('textarea', () => {
+  test('escapes its value', () => {
+    const out = textarea({ name: 't', value: EVIL }).__html;
+    expect(out).toContain(`>${EVIL_ESCAPED}</textarea>`);
+    expect(out).not.toContain('<img');
+  });
+
+  test('puts name as the first attribute', () => {
+    expect(textarea({ name: 't', id: 'x', rows: 5 }).__html).toMatch(/^<textarea name="t"/);
+  });
+
+  test('uses rows 3 by default and the given rows otherwise', () => {
+    expect(textarea({ name: 't' }).__html).toContain('rows="3"');
+    expect(textarea({ name: 't', rows: 8 }).__html).toContain('rows="8"');
   });
 });
 

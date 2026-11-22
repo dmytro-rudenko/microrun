@@ -3,7 +3,7 @@ import { alert } from './form.ts';
 import { html, maskUrl, tr, type Html } from './html.ts';
 import { agentBadge, diffView, markerText, notes, offlineAlert, prodTag, short, releaseBadge, windowBar, windowLeft, windowText, type EnvVM, type ReleaseVM } from './board.ts';
 
-const CELL = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2';
+const CELL = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2 [overflow-wrap:anywhere]';
 const HEAD = `${CELL} text-xs font-semibold text-mute`;
 const ROW = 'cursor-pointer [&:hover>td]:bg-bg [&:focus-visible>td]:bg-bg';
 

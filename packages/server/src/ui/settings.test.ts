@@ -486,6 +486,18 @@ describe('serversView', () => {
     expect(bareDisplayOnHidden(out)).toBe(false);
   });
 
+  test('the delete dialog onclose resets its form and disables its submit button again', () => {
+    const out = serversView(en, servers, 'csrf-1').__html;
+    const open = /<dialog[^>]*data-testid="server-delete-dialog-edge"[^>]*>/.exec(out)?.[0] ?? '';
+    expect(open).toMatch(/onclose="[^"]*reset\(\)[^"]*disabled=true/);
+  });
+
+  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
+    const cells = serversView(en, servers, 'csrf-1').__html.match(/<td[\s>][^>]*>/g) ?? [];
+    expect(cells.length).toBeGreaterThan(0);
+    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
+  });
+
   test('escapes a hostile server name in the dialog title, label and data-name without leaking a raw character', () => {
     const name = 'a&b"<';
     const escaped = 'a&amp;b&quot;&lt;';

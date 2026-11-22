@@ -218,6 +218,15 @@ describe('Repo', () => {
       expect(await repo.getEnv(env.id)).not.toBeNull();
     });
 
+    it('refuses an environment with a pending operation', async () => {
+      const s = await mkServer();
+      const env = await mkEnv(s.id, 'staging', 'develop');
+      await repo.createOperation(newOperation(env.id, 'pending'));
+
+      expect(await repo.deleteEnv(env.id)).toBe('busy');
+      expect(await repo.getEnv(env.id)).not.toBeNull();
+    });
+
     it('deletes the environment with its releases, operations and approvals, then reports it missing', async () => {
       const s = await mkServer();
       const env = await mkEnv(s.id, 'staging', 'develop');

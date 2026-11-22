@@ -193,9 +193,10 @@ The admin sees the record count for each rule and confirms the cleanup in the UI
 
 ```sh
 pnpm install
-pnpm --filter @microrun/server dev:css   # rebuild the stylesheet on change
 pnpm -r build
 pnpm test          # unit and integration tests
 pnpm test:docker   # agent tests against a real Docker engine
 pnpm test:e2e      # Playwright, the full scenario
 ```
+
+The stylesheet `packages/server/src/public/app.css` is generated from `app.src.css` by `pnpm -r build` and is gitignored; run `pnpm --filter @microrun/server dev:css` in a second terminal to rebuild it on change.

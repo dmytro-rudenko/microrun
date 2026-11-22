@@ -1129,6 +1129,16 @@ describe('UI routes', () => {
       expect(bare.statusCode).toBe(403);
     });
 
+    it('does not disconnect any agent on a 400, 409 or 404 server delete', async () => {
+      const edge = await edgeServer();
+      const spy = vi.spyOn(hub, 'disconnect');
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edg' })).statusCode).toBe(400);
+      await qaEnv(edge.id);
+      expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(409);
+      expect((await post('/settings/servers/nope/delete', { confirm_name: 'nope' })).statusCode).toBe(404);
+      expect(spy).not.toHaveBeenCalled();
+    });
+
     it('deletes an idle environment with its releases, operations and approvals', async () => {
       await deploy(A);
       await idle();

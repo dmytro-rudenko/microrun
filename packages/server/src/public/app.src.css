@@ -83,6 +83,7 @@
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
 
+@layer base{button:not(:disabled),[role="button"]:not(:disabled){cursor:pointer}}
 #panel{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .2s,visibility .2s;overflow-y:auto;z-index:5;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
 #panel:not(:empty){transform:none;visibility:visible}
 #panel:has(.in.prod){border-left:4px solid var(--prod)}

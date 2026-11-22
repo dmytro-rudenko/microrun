@@ -185,7 +185,7 @@ const fieldLabel = (i: I18n, name: string) => tr(i, `settings.f.${name}`);
 const H1 = 'mt-2 mb-1 font-display text-2xl font-bold';
 const TABLE = 'w-full border-collapse overflow-hidden rounded-[10px] border border-line bg-surface';
 const TH = 'border-b border-line px-3 py-2.5 text-left align-middle text-xs font-semibold text-mute max-[900px]:p-2';
-const TD = 'border-b border-line px-3 py-2.5 text-left align-middle max-[900px]:p-2';
+const TD = 'border-b border-line px-3 py-2.5 text-left align-middle max-[900px]:p-2 [overflow-wrap:anywhere]';
 const PROXY_OPTIONS = PROXY_MODES.map((m) => ({ value: m, label: m }));
 
 function deleteDialog(
@@ -198,7 +198,7 @@ function deleteDialog(
     testid: p.base + p.suffix,
     label: tr(i, 'settings.delete'),
     attrs: raw(' onclick="this.nextElementSibling.showModal()"'),
-  })}<dialog data-testid="${p.base}-dialog${p.suffix}" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
+  })}<dialog data-testid="${p.base}-dialog${p.suffix}" onclose="var f=this.querySelector('form');f.reset();f.querySelector('button[type=submit]').disabled=true" class="m-auto w-[min(28rem,calc(100vw-2rem))] rounded-xl border border-line bg-surface p-6 text-ink shadow-xl backdrop:bg-black/50">
 <form method="post" action="${p.action}" class="flex flex-col gap-4">${p.csrf}
 <h2 class="font-display text-lg font-semibold">${p.title}</h2>
 <p class="text-sm text-mute">${p.body}</p>

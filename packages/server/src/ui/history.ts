@@ -19,7 +19,7 @@ export interface HistoryVM {
 const actorText = (i: I18n, actor: string) =>
   actor.startsWith('ci:') ? tr(i, 'actor.ci', { name: actor.slice(3) }) : tr(i, `actor.${actor}`);
 
-const td = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2';
+const td = 'border-b border-line px-3 py-2.5 text-left align-top max-[900px]:p-2 [overflow-wrap:anywhere]';
 const th = 'border-b border-line px-3 py-2.5 text-left align-top text-xs font-semibold text-mute max-[900px]:p-2';
 const hideSm = 'max-[900px]:hidden';
 const small = 'text-xs text-mute';

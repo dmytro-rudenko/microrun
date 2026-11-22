@@ -124,6 +124,8 @@ const tagOf = (out: string, testid: string) =>
 
 const isDisabled = (tag: string) => /\sdisabled(?=[\s=>/])/.test(tag);
 
+const tdTags = (out: string) => out.match(/<td[\s>][^>]*>/g) ?? [];
+
 describe('html and raw', () => {
   test('html escapes markup in interpolated values', () => {
     const out = html`<p>${'<script>alert(1)</script>'}</p>`.__html;
@@ -296,6 +298,12 @@ describe('envView', () => {
     const out = envView(i, e, NOW).__html;
     expect(out.split(esc(url)).length - 1).toBeGreaterThanOrEqual(2);
   });
+
+  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
+    const cells = tdTags(envView(i, env('stage'), NOW).__html);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
+  });
 });
 
 describe('maskUrl', () => {
@@ -368,6 +376,12 @@ describe('historyView', () => {
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
     expect(out).not.toContain('&amp;lt;');
+  });
+
+  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
+    const cells = tdTags(historyView(i, [op()], envs, '').__html);
+    expect(cells.length).toBeGreaterThan(0);
+    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
   });
 });
 
