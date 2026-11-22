@@ -463,19 +463,47 @@ describe('releaseHistory', () => {
 
 describe('layout', () => {
   const i = i18n('de');
-  const page = layout({ i, title: 'Environments', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') });
+  const params = { i, title: 'Environments', csrf: 'tok-123', body: raw('<p id="body-marker">hi</p>') };
+  const page = layout(params);
+  const header = /<header\b[\s\S]*?<\/header>/.exec(page)?.[0] ?? '';
+  const newEnvLink = /<a\b[^>]*\bdata-testid="env-new"[^>]*>[\s\S]*?<\/a>/.exec(header)?.[0] ?? '';
 
   test('the header has a brand link home and a New environment link to /env/new', () => {
-    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
     expect(header).toMatch(/<a href="\/"[^>]*><b[^>]*>(?:<span[^>]*>[^<]*<\/span>)?microrun<\/b><\/a>/);
-    expect(tagOf(page, 'env-new')).toContain('href="/env/new"');
-    expect(header).toContain(`>${i.t('env.newEnv')}</a>`);
+    expect(tagOf(newEnvLink, 'env-new')).toContain('href="/env/new"');
+    expect(newEnvLink).toContain(`>${i.t('env.newEnv')}<`);
   });
 
   test('the header no longer links to the history or servers pages', () => {
-    const header = page.slice(page.indexOf('<header'), page.indexOf('</header>'));
     expect(header).not.toContain('href="/history"');
     expect(header).not.toContain('href="/settings/servers"');
+  });
+
+  test('the header search submits q and selects the home region', () => {
+    const form = /<form\b[^>]*\brole="search"[^>]*>[\s\S]*?<\/form>/.exec(header)?.[0] ?? '';
+    expect(form).toContain('data-testid="search"');
+    expect(tagOf(form, 'search')).toContain('name="q"');
+    expect(/^<form\b[^>]*>/.exec(form)?.[0]).toContain('hx-select="#home"');
+  });
+
+  test('the header wraps its content in a 1320 px column', () => {
+    const classes = /^<header\b[^>]*>\s*<div\b[^>]*\bclass="([^"]*)"[^>]*>[\s\S]*<\/div>\s*<\/header>$/.exec(header)?.[1];
+    expect(classes?.split(/\s+/) ?? []).toContain('max-w-[1320px]');
+  });
+
+  test('the main content is capped at 1320 px', () => {
+    const classes = /<main\b[^>]*\bclass="([^"]*)"/.exec(page)?.[1];
+    expect(classes?.split(/\s+/) ?? []).toContain('max-w-[1320px]');
+  });
+
+  test('the search input shows the current query', () => {
+    const searchParams = { ...params, q: 'abc' };
+    expect(tagOf(layout(searchParams), 'search') ?? '').toContain('value="abc"');
+  });
+
+  test('the New environment link shows the short label and keeps the full accessible name', () => {
+    expect(newEnvLink).toContain(`>${i.t('env.newEnvShort')}</span>`);
+    expect(tagOf(newEnvLink, 'env-new')).toContain(`aria-label="${i.t('env.newEnv')}"`);
   });
 
   test('has a lang select offering all 8 languages, the current one selected', () => {
