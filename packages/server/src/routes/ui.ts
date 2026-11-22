@@ -11,7 +11,7 @@ import { composeRefOf, type EnvRow, type OperationRow, type ReleaseRow, type Ser
 import { boardView, short, type EnvVM, type ReleaseVM } from '../ui/board.ts';
 import { envView, newEnvView } from '../ui/env.ts';
 import { alert } from '../ui/form.ts';
-import { envHistory, type HistoryVM } from '../ui/history.ts';
+import { releaseHistory, type HistoryVM } from '../ui/history.ts';
 import { codeText, html, type Html } from '../ui/html.ts';
 import { layout } from '../ui/layout.ts';
 import { opProgressView, panelView } from '../ui/panel.ts';
@@ -144,7 +144,8 @@ async function panelFor(d: AppDeps, req: FastifyRequest, releaseId: string | nul
   if (!rel || !env) return null;
   const vm = await oneEnvVM(d, env);
   const r = vm.releases.find((x) => x.id === rel.id)!;
-  return panelView(langOf(req), vm, r, req.csrfToken, d.clock());
+  const i = langOf(req);
+  return panelView(i, vm, r, req.csrfToken, releaseHistory(i, await historyOf(d, env, rel.id)));
 }
 
 function serviceSteps(i: I18n, s: EnvRow['services'][number], switched: boolean): { label: string; done: boolean }[] {
@@ -266,11 +267,9 @@ async function settingsHtml(d: AppDeps, req: FastifyRequest, p: EnvFormInput): P
   return envFormView(langOf(req), { ...p, csrf: req.csrfToken, serverBlock });
 }
 
-async function envPage(d: AppDeps, req: FastifyRequest, reply: FastifyReply, env: EnvRow, p: EnvFormInput, historyAll: boolean, status = 200) {
+async function envPage(d: AppDeps, req: FastifyRequest, reply: FastifyReply, env: EnvRow, p: EnvFormInput, status = 200) {
   const i = langOf(req);
-  const rels = new Map((await d.repo.listReleases(env.id)).map((r) => [r.id, r]));
-  const rows = (await d.repo.listOperations({ envId: env.id, limit: OPS_PER_ENV })).filter(finished).flatMap((o) => historyRow(o, [env], rels));
-  const parts = { history: envHistory(i, rows, env.id, historyAll), settings: await settingsHtml(d, req, p) };
+  const parts = { settings: await settingsHtml(d, req, p) };
   return page(req, reply, env.name, envView(i, await oneEnvVM(d, env), d.clock(), parts), status);
 }
 
@@ -336,14 +335,10 @@ function cleanupRows(o: OperationRow, rel: ReleaseRow | undefined): HistoryVM['c
   }));
 }
 
-function historyRow(o: OperationRow, envs: EnvRow[], rels: Map<string, ReleaseRow>): HistoryVM[] {
-  const env = envs.find((e) => e.id === o.envId);
-  if (!env) return [];
+function historyRow(o: OperationRow, rels: Map<string, ReleaseRow>): HistoryVM {
   const sha = (id: string | null) => (id && rels.get(id)?.commitSha) || '—';
-  return [{
+  return {
     at: o.startedAt,
-    env: env.name,
-    isProduction: env.isProduction,
     kind: o.kind,
     from: sha(o.fromReleaseId),
     to: sha(o.toReleaseId),
@@ -352,7 +347,13 @@ function historyRow(o: OperationRow, envs: EnvRow[], rels: Map<string, ReleaseRo
     durationS: o.finishedAt === null ? null : seconds(o),
     reason: o.code && (o.status !== 'succeeded' || o.code === 'CLEANUP_MISMATCH') ? { code: o.code, params: wire(o.params) } : null,
     cleanup: cleanupRows(o, o.toReleaseId ? rels.get(o.toReleaseId) : undefined),
-  }];
+  };
+}
+
+async function historyOf(d: AppDeps, env: EnvRow, releaseId: string): Promise<HistoryVM[]> {
+  const rels = new Map((await d.repo.listReleases(env.id)).map((r) => [r.id, r]));
+  const ops = await d.repo.listOperations({ envId: env.id, limit: OPS_PER_ENV });
+  return ops.filter((o) => finished(o) && (o.toReleaseId === releaseId || o.fromReleaseId === releaseId)).map((o) => historyRow(o, rels));
 }
 
 export function registerUi(app: FastifyInstance, d: AppDeps): void {
@@ -370,10 +371,10 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
 
   app.get('/env/new', async (req, reply) => newEnvPage(d, req, reply, { values: {}, errors: {}, isNew: true }));
 
-  app.get<{ Params: { id: string }; Querystring: { history?: string } }>('/env/:id', async (req, reply) => {
+  app.get<{ Params: { id: string } }>('/env/:id', async (req, reply) => {
     const env = await repo.getEnv(req.params.id);
     if (!env) return reply.code(404).send();
-    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false }, req.query.history === 'all');
+    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false });
   });
 
   app.get<{ Params: { releaseId: string } }>('/panel/:releaseId', async (req, reply) => panelOr404(d, req, reply, req.params.releaseId));
@@ -519,7 +520,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (!env) return reply.code(404).send();
     const i = langOf(req);
     const again = (deleteError: string, status: number) =>
-      envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, false, status);
+      envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, status);
     if (field(bodyOf(req), 'confirm_name') !== env.name) return again(i.text('settings.confirmName', { name: env.name }), 400);
     const res = await repo.deleteEnv(env.id);
     if (res === 'missing') return reply.code(404).send();
@@ -535,7 +536,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const values = bodyValues(b);
     const rejected = (errors: Record<string, string>) =>
       existing
-        ? envPage(d, req, reply, existing, { values, errors, isNew: false, storedName: existing.name }, false, 422)
+        ? envPage(d, req, reply, existing, { values, errors, isNew: false, storedName: existing.name }, 422)
         : newEnvPage(d, req, reply, { values, errors, isNew: true }, 422);
     const parsed = parseEnvForm(b);
     if (!parsed.ok) return rejected(parsed.errors);
@@ -552,7 +553,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
       deployTokenHash: existing ? existing.deployTokenHash : hashToken(token!),
       ...(existing ? { id: existing.id } : {}),
     });
-    return envPage(d, req, reply, saved, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown }, false);
+    return envPage(d, req, reply, saved, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown });
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/bind', async (req, reply) => {
@@ -564,7 +565,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
       ? `${i.text('settings.env.bind')}: ${i.text('common.yes')}`
       : codePlain(i, res.code, { env: env.name, svc: env.migrationService, ...res.params });
     const fresh = (await repo.getEnv(env.id))!;
-    return envPage(d, req, reply, fresh, { values: toValues(d, fresh), errors: {}, isNew: false, bind: { ok: res.ok, text } }, false);
+    return envPage(d, req, reply, fresh, { values: toValues(d, fresh), errors: {}, isNew: false, bind: { ok: res.ok, text } });
   });
 
   app.post<{ Params: { id: string } }>('/settings/env/:id/token', async (req, reply) => {
@@ -572,6 +573,6 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (!env) return reply.code(404).send();
     const token = newToken();
     await repo.saveEnv({ ...env, deployTokenHash: hashToken(token) });
-    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deployToken: token }, false);
+    return envPage(d, req, reply, env, { values: toValues(d, env), errors: {}, isNew: false, deployToken: token });
   });
 }

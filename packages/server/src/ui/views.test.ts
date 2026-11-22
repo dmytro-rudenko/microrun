@@ -3,13 +3,13 @@ import { LANGS, allKeys, i18n, type Lang } from '@microrun/core/i18n';
 import { esc, html, maskUrl, raw } from './html.ts';
 import { boardView } from './board.ts';
 import { envView, newEnvView } from './env.ts';
-import { envHistory } from './history.ts';
+import { releaseHistory } from './history.ts';
 import { layout } from './layout.ts';
 import { cleanupView, opProgressView, panelView } from './panel.ts';
 
 type EnvVM = Parameters<typeof boardView>[1][number];
 type ReleaseVM = Parameters<typeof panelView>[2];
-type HistoryVM = Parameters<typeof envHistory>[1][number];
+type HistoryVM = Parameters<typeof releaseHistory>[1][number];
 
 const NOW = Date.UTC(2026, 10, 22, 12, 0, 0);
 const HOUR = 3_600_000;
@@ -47,8 +47,6 @@ function release(over: Partial<ReleaseVM> = {}): ReleaseVM {
 function op(over: Partial<HistoryVM> = {}): HistoryVM {
   return {
     at: NOW - HOUR,
-    env: 'stage',
-    isProduction: false,
     kind: 'deploy',
     from: sha('1111111'),
     to: sha('2222222'),
@@ -125,7 +123,7 @@ const tagOf = (out: string, testid: string) =>
 
 const isDisabled = (tag: string) => /\sdisabled(?=[\s=>/])/.test(tag);
 
-const parts = { history: html`<p>H</p>`, settings: html`<p>S</p>` };
+const parts = { settings: html`<p>S</p>` };
 const tdTags = (out: string) => out.match(/<td[\s>][^>]*>/g) ?? [];
 
 describe('html and raw', () => {
@@ -271,28 +269,18 @@ describe('envView', () => {
     expect(tagOf(out, 'rel-stage-1111111')).toContain('hx-target="#panel"');
   });
 
-  test('renders the releases, history and settings sections in that order', () => {
+  test('renders the releases and settings sections in that order, with no history section', () => {
     const out = envView(i, env('stage'), NOW, parts).__html;
     const at = (id: string) => out.indexOf(`<section id="${id}">`);
     expect(at('releases')).toBeGreaterThanOrEqual(0);
-    expect(at('releases')).toBeLessThan(at('history'));
-    expect(at('history')).toBeLessThan(at('settings'));
-    expect(out.match(/<section id=/g)).toHaveLength(3);
-  });
-
-  test('the history and settings parts land in their own sections', () => {
-    const out = envView(i, env('stage'), NOW, parts).__html;
-    const history = out.slice(out.indexOf('<section id="history">'), out.indexOf('<section id="settings">'));
-    const settings = out.slice(out.indexOf('<section id="settings">'));
-    expect(history).toContain('<p>H</p>');
-    expect(history).not.toContain('<p>S</p>');
-    expect(settings).toContain('<p>S</p>');
-    expect(settings).not.toContain('<p>H</p>');
+    expect(at('releases')).toBeLessThan(at('settings'));
+    expect(out.match(/<section id=/g)).toHaveLength(2);
+    expect(out).not.toContain('<section id="history">');
   });
 
   test('the releases table sits inside the releases section', () => {
     const out = envView(i, env('stage'), NOW, parts).__html;
-    const releases = out.slice(out.indexOf('<section id="releases">'), out.indexOf('<section id="history">'));
+    const releases = out.slice(out.indexOf('<section id="releases">'), out.indexOf('<section id="settings">'));
     expect(releases).toContain('<table');
     expect(releases).toContain('data-testid="rel-stage-');
   });
@@ -313,11 +301,11 @@ describe('envView', () => {
     expect(nav).not.toContain('PRODUCTION');
   });
 
-  test('the jump nav links to the three sections', () => {
+  test('the jump nav links to the releases and settings sections', () => {
     const out = envView(i, env('stage'), NOW, parts).__html;
     const nav = out.slice(out.indexOf('data-testid="env-jump"'), out.indexOf('</nav>'));
     expect(nav).toContain(`<a href="#releases">${i.t('env.sec.releases')}</a>`);
-    expect(nav).toContain(`<a href="#history">${i.t('env.sec.history')}</a>`);
+    expect(nav).not.toContain('href="#history"');
     expect(nav).toContain(`<a href="#settings">${i.t('env.sec.settings')}</a>`);
   });
 
@@ -347,7 +335,7 @@ describe('envView', () => {
     expect(out).not.toContain(secret);
     expect(out).toContain(esc(masked));
     expect(boardView(i, [e], NOW).__html).not.toContain(secret);
-    expect(panelView(i, e, e.releases[0]!, 'csrf-token', NOW).__html).not.toContain(secret);
+    expect(panelView(i, e, e.releases[0]!, 'csrf-token', html``).__html).not.toContain(secret);
   });
 
   test.each([
@@ -398,58 +386,36 @@ describe('maskUrl', () => {
   });
 });
 
-describe('envHistory', () => {
+describe('releaseHistory', () => {
   const i = i18n('en');
-  const rows = (n: number) => Array.from({ length: n }, (_, k) => op({ to: sha(`${k + 1}`.repeat(7)) }));
-  const bodyRows = (out: string) => out.slice(out.indexOf('<tbody')).match(/<tr[\s>]/g) ?? [];
+  const items = (out: string) => out.match(/data-testid="history-item"/g) ?? [];
 
-  test('shows the first 5 of 7 operations and a link to the full history', () => {
-    const out = envHistory(i, rows(7), 'env-stage', false).__html;
-    expect(bodyRows(out)).toHaveLength(5);
-    expect(tagOf(out, 'history-all')).toContain('href="/env/env-stage?history=all#history"');
-    const text = />([^<]*)<\/a>/.exec(out.slice(out.indexOf('data-testid="history-all"')))?.[1];
-    expect(text).toBe(i.t('env.historyAll', { n: i.num(7) }));
-    expect(text).toContain('7');
-  });
-
-  test('shows all 7 operations and no link when all is true', () => {
-    const out = envHistory(i, rows(7), 'env-stage', true).__html;
-    expect(bodyRows(out)).toHaveLength(7);
-    expect(out).not.toContain('history-all');
-  });
-
-  test('shows 5 operations and no link when there are exactly 5', () => {
-    const out = envHistory(i, rows(5), 'env-stage', false).__html;
-    expect(bodyRows(out)).toHaveLength(5);
-    expect(out).not.toContain('history-all');
-  });
-
-  test('shows the empty message and no table when there are no operations', () => {
-    const out = envHistory(i, [], 'env-stage', false).__html;
-    expect(tagOf(out, 'history-empty')).toBeDefined();
-    expect(out).toContain(i.t('env.historyEmpty'));
-    expect(out).not.toContain('<table');
-    expect(out).not.toContain('history-all');
-  });
-
-  test('has no env column', () => {
-    const out = envHistory(i, rows(2), 'env-stage', false).__html;
-    const head = out.slice(out.indexOf('<thead'), out.indexOf('</thead>'));
-    expect(head.match(/<th[\s>]/g)).toHaveLength(5);
-    for (const key of ['col.when', 'col.action', 'col.fromTo', 'col.who', 'col.result']) expect(head).toContain(i.t(key));
-    expect(head).not.toContain(i.t('col.env'));
-    expect(out).not.toContain('>stage<');
-  });
-
-  test('renders one table row per operation', () => {
+  test('renders one item per operation under the history heading', () => {
     const ops = [
       op({ to: sha('2222222') }),
       op({ kind: 'rollback', from: sha('2222222'), to: sha('3333333') }),
       op({ kind: 'cleanup', from: sha('4444444'), to: sha('4444444') }),
     ];
-    const out = envHistory(i, ops, 'env-stage', false).__html;
-    expect(out.match(/<tr[\s>]/g)).toHaveLength(ops.length + 1);
-    for (const head of ['2222222', '3333333', '4444444']) expect(out).toContain(head);
+    const out = releaseHistory(i, ops).__html;
+    expect(tagOf(out, 'release-history')).toBeDefined();
+    expect(out).toContain(i.t('env.sec.history'));
+    expect(items(out)).toHaveLength(ops.length);
+    for (const head of ['2222222 → 3333333', '4444444']) expect(out).toContain(head);
+    expect(out).not.toContain('history-all');
+  });
+
+  test('shows the empty message and no list when there are no operations', () => {
+    const out = releaseHistory(i, []).__html;
+    expect(tagOf(out, 'history-empty')).toBeDefined();
+    expect(out).toContain(i.t('env.historyEmpty'));
+    expect(out).not.toContain('<ul');
+  });
+
+  test('shows the actor, status and duration of an operation', () => {
+    const out = releaseHistory(i, [op({ actor: 'ci:alice', durationS: 12 })]).__html;
+    expect(out).toContain(i.t('actor.ci', { name: 'alice' }));
+    expect(out).toContain('data-status="ok"');
+    expect(out).toContain(i.unit(12, 'second'));
   });
 
   test.each(['en', 'uk', 'de'] as const)('a failure reason is localized through codes.* in %s', (lang) => {
@@ -457,37 +423,41 @@ describe('envHistory', () => {
     const params = { col: 'users.email' };
     const text = li.t('codes.SCHEMA_DESTRUCTIVE', params);
     expect(text).not.toBe('codes.SCHEMA_DESTRUCTIVE');
-    const out = envHistory(li, [op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params } })], 'env-stage', false).__html;
-    expect(out).toContain(text);
+    expect(releaseHistory(li, [op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params } })]).__html).toContain(text);
   });
 
   test.each(LANGS)('an approve operation is labelled from the catalog in %s', (lang) => {
     const li = i18n(lang);
     const label = li.t('kind.approve');
     expect(label).not.toBe('kind.approve');
-    const out = envHistory(li, [op({ kind: 'approve', from: '—', to: sha('2222222') })], 'env-stage', false).__html;
+    const out = releaseHistory(li, [op({ kind: 'approve', from: '—', to: sha('2222222') })]).__html;
     expect(out).toContain(label);
     expect(out).not.toContain('kind.approve');
   });
 
   test('a hostile actor name is escaped', () => {
-    const out = envHistory(i, [op({ actor: `ci:${EVIL}` })], 'env-stage', false).__html;
+    const out = releaseHistory(i, [op({ actor: `ci:${EVIL}` })]).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
 
   test('a hostile reason parameter is escaped exactly once', () => {
     const reason = { code: 'SCHEMA_DESTRUCTIVE', params: { col: EVIL } };
-    const out = envHistory(i, [op({ status: 'rejected', reason })], 'env-stage', false).__html;
+    const out = releaseHistory(i, [op({ status: 'rejected', reason })]).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
     expect(out).not.toContain('&amp;lt;');
   });
 
-  test('every table cell wraps long text with overflow-wrap:anywhere', () => {
-    const cells = tdTags(envHistory(i, [op()], 'env-stage', false).__html);
-    expect(cells.length).toBeGreaterThan(0);
-    for (const td of cells) expect(td).toContain('[overflow-wrap:anywhere]');
+  test('items wrap long text with overflow-wrap:anywhere', () => {
+    expect(tagOf(releaseHistory(i, [op()]).__html, 'history-item')).toContain('[overflow-wrap:anywhere]');
+  });
+
+  test('panelView places the history last in the panel', () => {
+    const r = release({ id: 'r-a', sha: sha('1111111'), state: 'active' });
+    const out = panelView(i, env('stage', { releases: [r] }), r, 'csrf', releaseHistory(i, [op()])).__html;
+    expect(out).toContain('data-testid="release-history"');
+    expect(out.indexOf('data-testid="release-history"')).toBeGreaterThan(out.indexOf(i.t('col.schema')));
   });
 });
 
@@ -630,7 +600,7 @@ describe('cleanupView', () => {
     expect(i.t('cl.preparing')).not.toBe('cl.preparing');
     expect(out).toContain(i.t('cl.preparing'));
     expect(out).not.toContain('data-testid="cleanup-apply"');
-    expect(tagOf(panelView(i, env('stage'), waiting, 'csrf-token', NOW).__html, 'cleanup-pending')).toContain('hx-get="/panel/r-blocked"');
+    expect(tagOf(panelView(i, env('stage'), waiting, 'csrf-token', html``).__html, 'cleanup-pending')).toContain('hx-get="/panel/r-blocked"');
   });
 
   test('a failed dry-run shows the failure and a retry-preview button and does not poll', () => {
@@ -754,7 +724,7 @@ describe('panelView', () => {
 
   test('for production rollback-go asks for confirmation before submitting', () => {
     const prod = env('prod');
-    const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', html``).__html;
     expect(tagOf(out, 'confirm-ask')).toMatch(/\bhidden\b/);
     expect(tagOf(out, 'confirm-yes')).toContain('type="submit"');
     expect(tagOf(out, 'rollback-go')).toContain('type="button"');
@@ -763,7 +733,7 @@ describe('panelView', () => {
 
   test('for production the confirm step moves focus to Yes and back to the main button', () => {
     const prod = env('prod');
-    const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, prod, prod.releases[0]!, 'csrf-token', html``).__html;
     expect(tagOf(out, 'rollback-go')).toContain('querySelector(&#39;[type=submit]&#39;).focus()');
     expect(tagOf(out, 'confirm-no')).toContain('focus()');
   });
@@ -773,7 +743,7 @@ describe('panelView', () => {
     const third = release({ id: 'r-seq3', state: 'available', activationSeq: 3 });
     const active = release({ id: 'r-act', state: 'active', activationSeq: 4 });
     const stage = env('stage', { releases: [active, first, third] });
-    const out = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, active, 'csrf-token', html``).__html;
     expect(out).toContain('<input type="hidden" name="releaseId" value="r-seq3">');
     expect(out).not.toContain('name="releaseId" value="r-seq1"');
   });
@@ -781,7 +751,7 @@ describe('panelView', () => {
   test('the active release offers no rollback without an available release', () => {
     const active = release({ id: 'r-act', state: 'active', activationSeq: 2 });
     const stage = env('stage', { releases: [active, release({ id: 'r-exp', state: 'expired', activationSeq: 1 })] });
-    const out = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, active, 'csrf-token', html``).__html;
     expect(out).not.toContain('data-testid="rollback-go"');
   });
 
@@ -789,9 +759,9 @@ describe('panelView', () => {
     const older = release({ id: 'r-old', state: 'available', activationSeq: 1 });
     const active = release({ id: 'r-act', state: 'active', activationSeq: 2 });
     const stage = env('stage', { releases: [active, older] });
-    const onOld = panelView(i, stage, older, 'csrf-token', NOW).__html;
+    const onOld = panelView(i, stage, older, 'csrf-token', html``).__html;
     expect(onOld).toContain(i.t('rb.switch'));
-    const onActive = panelView(i, stage, active, 'csrf-token', NOW).__html;
+    const onActive = panelView(i, stage, active, 'csrf-token', html``).__html;
     expect(onActive).toContain(i.t('rb.go'));
     expect(onActive).toContain('value="r-old"');
     expect(onActive).not.toContain(i.t('rb.switch'));
@@ -799,7 +769,7 @@ describe('panelView', () => {
 
   test('has an empty alert slot that rejections are retargeted into', () => {
     const stage = env('stage');
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     expect(out).toMatch(/<div[^>]*id="panel-alert"[^>]*><\/div>/);
     expect(out.match(/id="panel-alert"/g)).toHaveLength(1);
   });
@@ -812,13 +782,13 @@ describe('panelView', () => {
     ['blocked', false, false],
   ] as const)('a %s release with stored=%s shows the storage warning: %s', (state, stored, shown) => {
     const r = release({ state, stored });
-    const out = panelView(i, env('stage', { releases: [r] }), r, 'csrf-token', NOW).__html;
+    const out = panelView(i, env('stage', { releases: [r] }), r, 'csrf-token', html``).__html;
     expect(out.includes(i.t('storage.failedWarn'))).toBe(shown);
   });
 
   test('for stage rollback-go is enabled', () => {
     const stage = env('stage');
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     const go = tagOf(out, 'rollback-go');
     expect(go).toBeDefined();
     expect(isDisabled(go!)).toBe(false);
@@ -829,20 +799,20 @@ describe('panelView', () => {
     expect(noMarker).not.toBe('rb.noMarker');
 
     const stage = env('stage', { markerWarnings: [{ svc: 'api', other: 'prod', url: 'postgres://db-host/shop' }] });
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     const go = tagOf(out, 'rollback-go');
     expect(go).toBeDefined();
     expect(isDisabled(go!)).toBe(true);
     expect(out).toContain(noMarker);
 
     const clean = env('stage');
-    const cleanOut = panelView(i, clean, clean.releases[0]!, 'csrf-token', NOW).__html;
+    const cleanOut = panelView(i, clean, clean.releases[0]!, 'csrf-token', html``).__html;
     expect(cleanOut).not.toContain(noMarker);
   });
 
   test('a commit message with markup is escaped in the panel', () => {
     const stage = env('stage', { releases: [release({ message: EVIL })] });
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     expect(out).not.toContain('<img');
     expect(out).toContain(EVIL_ESCAPED);
   });
@@ -856,7 +826,7 @@ describe('panelView', () => {
       failNote: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users.email' } },
     });
     const stage = env('stage', { releases: [failed] });
-    const out = panelView(i, stage, failed, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, failed, 'csrf-token', html``).__html;
     expect(tagOf(out, 'approve-destructive')).toBeDefined();
     expect(out).toContain(i.t('codes.SCHEMA_DESTRUCTIVE', { col: 'users.email' }));
     expect(out).not.toContain('data-testid="rollback-go"');
@@ -864,13 +834,13 @@ describe('panelView', () => {
 
   test('an available release does not offer approve-destructive', () => {
     const stage = env('stage');
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     expect(out).not.toContain('approve-destructive');
   });
 
   test('an available release does not offer to close the rollback window', () => {
     const stage = env('stage');
-    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, stage.releases[0]!, 'csrf-token', html``).__html;
     expect(out).not.toContain('/close-window');
     expect(out).not.toContain('data-testid="close-window"');
   });
@@ -881,7 +851,7 @@ describe('panelView', () => {
     const later = release({ id: 'r-b', sha: sha('3333333'), state: 'available', deployedAt: NOW - 3 * DAY, activationSeq: 4 });
     const earlier = release({ id: 'r-c', sha: sha('4444444'), state: 'available', deployedAt: NOW - HOUR, activationSeq: 1 });
     const stage = env('stage', { releases: [earlier, active, later, target] });
-    const out = panelView(i, stage, target, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, target, 'csrf-token', html``).__html;
     const from = out.indexOf(i.t('rb.willBlock'));
     expect(from).toBeGreaterThanOrEqual(0);
     const list = out.slice(from, out.indexOf('</div>', from));
@@ -897,7 +867,7 @@ describe('panelView', () => {
     const never = release({ id: 'r-c', sha: sha('4444444'), state: 'available', activationSeq: null });
     const active = release({ id: 'r-a', sha: sha('1111111'), state: 'active', activationSeq: null, windowLeftMs: null, windowPct: null });
     const stage = env('stage', { releases: [active, activated, never, target] });
-    const out = panelView(i, stage, target, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, target, 'csrf-token', html``).__html;
     const from = out.indexOf(i.t('rb.willBlock'));
     const list = out.slice(from, out.indexOf('</div>', from));
     expect(list).toContain('1111111');
@@ -918,7 +888,7 @@ describe('panelView', () => {
         release({ id: 'r-blk', sha: sha('5555555'), state: 'blocked', ...quiet }),
       ],
     });
-    const out = panelView(i, stage, bad, 'csrf-token', NOW).__html;
+    const out = panelView(i, stage, bad, 'csrf-token', html``).__html;
     const at = out.lastIndexOf(i.t('approve.title'));
     expect(at).toBeGreaterThanOrEqual(0);
     const section = out.slice(at);
@@ -937,13 +907,13 @@ describe('production tag', () => {
     const prodViews = [
       boardView(li, [prod], NOW).__html,
       envView(li, prod, NOW, parts).__html,
-      panelView(li, prod, prod.releases[0]!, 'csrf-token', NOW).__html,
+      panelView(li, prod, prod.releases[0]!, 'csrf-token', html``).__html,
     ];
     for (const out of prodViews) expect(out).toContain(`>${tag}<`);
     const stageViews = [
       boardView(li, [stage], NOW).__html,
       envView(li, stage, NOW, parts).__html,
-      panelView(li, stage, stage.releases[0]!, 'csrf-token', NOW).__html,
+      panelView(li, stage, stage.releases[0]!, 'csrf-token', html``).__html,
     ];
     for (const out of stageViews) expect(out).not.toContain(`>${tag}<`);
   });
@@ -1004,7 +974,7 @@ describe('every view in every language', () => {
     op({ kind: 'rollback', actor: 'system', durationS: 30 }),
     op({ kind: 'cleanup', actor: 'ci:github', durationS: null }),
     op({ kind: 'contract', status: 'failed', reason: { code: 'CONTRACT_FAILED', params: { sha: '8888888', env: 'prod' } } }),
-    op({ kind: 'expire', env: 'prod', isProduction: true }),
+    op({ kind: 'expire' }),
     op({ status: 'rejected', reason: { code: 'COMMIT_BLOCKED', params: { sha: '4444444', env: 'prod', at: NOW - DAY } } }),
     op({ status: 'rejected', reason: { code: 'SCHEMA_DESTRUCTIVE', params: { col: 'users_email' } } }),
     op({ status: 'failed', reason: { code: 'CLEANUP_MISMATCH', params: { expected: 50 } } }),
@@ -1023,13 +993,13 @@ describe('every view in every language', () => {
 
     expectNoRawKeys(lang, 'envView prod', envView(li, prod, NOW, parts).__html);
     expectNoRawKeys(lang, 'envView stage', envView(li, offline, NOW, parts).__html);
-    expectNoRawKeys(lang, 'envHistory', envHistory(li, ops, prod.id, false).__html);
+    expectNoRawKeys(lang, 'releaseHistory', releaseHistory(li, ops).__html);
     expectNoRawKeys(lang, 'newEnvView', newEnvView(li, html``).__html);
     for (const r of releases) {
-      expectNoRawKeys(lang, `panelView prod ${r.id}`, panelView(li, prod, r, 'csrf-token', NOW).__html);
+      expectNoRawKeys(lang, `panelView prod ${r.id}`, panelView(li, prod, r, 'csrf-token', html``).__html);
       expectNoRawKeys(lang, `cleanupView ${r.id}`, cleanupView(li, r, 'csrf-token').__html);
     }
-    expectNoRawKeys(lang, 'panelView offline', panelView(li, offline, offline.releases[0]!, 'csrf-token', NOW).__html);
+    expectNoRawKeys(lang, 'panelView offline', panelView(li, offline, offline.releases[0]!, 'csrf-token', html``).__html);
     expectNoRawKeys(lang, 'boardView', boardView(li, [prod, offline], NOW).__html);
   });
 });
