@@ -49,6 +49,7 @@ type EnvFormInput = {
   isNew: boolean;
   deployToken?: string;
   deleteError?: string;
+  storedName?: string;
   bind?: { ok: boolean; text: string };
   rollingHint?: boolean;
 };
@@ -490,13 +491,13 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const server = await repo.getServer(req.params.id);
     if (!server) return reply.code(404).send();
     const i = langOf(req);
-    if (field(bodyOf(req), 'confirm_name') !== server.name) return serversPage(d, req, reply, undefined, i.t('settings.confirmName', { name: server.name }), 400);
+    if (field(bodyOf(req), 'confirm_name') !== server.name) return serversPage(d, req, reply, undefined, i.text('settings.confirmName', { name: server.name }), 400);
     const res = await repo.deleteServer(server.id);
     if (res === 'missing') return reply.code(404).send();
-    if (res === 'builtin') return serversPage(d, req, reply, undefined, i.t('settings.servers.deleteBuiltin'), 409);
+    if (res === 'builtin') return serversPage(d, req, reply, undefined, i.text('settings.servers.deleteBuiltin'), 409);
     if (res === 'has-envs') {
       const n = await repo.countEnvsOnServer(server.id);
-      return serversPage(d, req, reply, undefined, i.t('settings.servers.deleteHasEnvs', { name: server.name, n }), 409);
+      return serversPage(d, req, reply, undefined, i.text('settings.servers.deleteHasEnvs', { name: server.name, n }), 409);
     }
     d.hub.disconnect(server.id);
     return reply.redirect('/settings/servers', 303);
@@ -508,10 +509,10 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const i = langOf(req);
     const again = (deleteError: string, status: number) =>
       envForm(d, req, reply, { values: toValues(d, env), errors: {}, isNew: false, deleteError }, status);
-    if (field(bodyOf(req), 'confirm_name') !== env.name) return again(i.t('settings.confirmName', { name: env.name }), 400);
+    if (field(bodyOf(req), 'confirm_name') !== env.name) return again(i.text('settings.confirmName', { name: env.name }), 400);
     const res = await repo.deleteEnv(env.id);
     if (res === 'missing') return reply.code(404).send();
-    if (res === 'busy') return again(i.t('settings.env.deleteBusy', { name: env.name }), 409);
+    if (res === 'busy') return again(i.text('settings.env.deleteBusy', { name: env.name }), 409);
     return reply.redirect('/', 303);
   });
 
@@ -530,11 +531,11 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     if (id && !existing) return reply.code(404).send();
     const values = bodyValues(b);
     const parsed = parseEnvForm(b);
-    if (!parsed.ok) return envForm(d, req, reply, { values, errors: parsed.errors, isNew: !existing }, 422);
+    if (!parsed.ok) return envForm(d, req, reply, { values, errors: parsed.errors, isNew: !existing, storedName: existing?.name }, 422);
     const taken = await uniquenessErrors(d, parsed.value, existing?.id);
-    if (taken) return envForm(d, req, reply, { values, errors: taken, isNew: !existing }, 422);
+    if (taken) return envForm(d, req, reply, { values, errors: taken, isNew: !existing, storedName: existing?.name }, 422);
     const rolling = await rollingCheck(d, parsed.value);
-    if (rolling.errors) return envForm(d, req, reply, { values, errors: rolling.errors, isNew: !existing }, 422);
+    if (rolling.errors) return envForm(d, req, reply, { values, errors: rolling.errors, isNew: !existing, storedName: existing?.name }, 422);
     const { storageConfig, ...rest } = parsed.value;
     const storage = keepSecrets(storageConfig, existing ? readStorage(d, existing) : null);
     const token = existing ? undefined : newToken();

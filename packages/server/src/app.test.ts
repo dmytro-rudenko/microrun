@@ -1164,6 +1164,27 @@ describe('UI routes', () => {
       expect(await repo.getEnv(stagingId)).not.toBeNull();
     });
 
+    it('escapes a server name exactly once in the has-envs error', async () => {
+      await post('/settings/servers', { name: 'a&b"<' });
+      const odd = (await repo.listServers()).find((s) => s.name === 'a&b"<')!;
+      await qaEnv(odd.id);
+      const res = await post(`/settings/servers/${odd.id}/delete`, { confirm_name: 'a&b"<' });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toContain('a&amp;b&quot;&lt;');
+      expect(res.body).not.toContain('&amp;amp;');
+    });
+
+    it('answers 404 to a repeated delete of the same environment', async () => {
+      expect((await post(`/settings/env/${stagingId}/delete`, { confirm_name: 'staging' })).statusCode).toBe(303);
+      expect((await post(`/settings/env/${stagingId}/delete`, { confirm_name: 'staging' })).statusCode).toBe(404);
+    });
+
+    it('asks for the stored name in the delete dialog after a failed save', async () => {
+      const res = await post('/settings/env', { id: stagingId, name: 'renamed', branch: '' });
+      expect(res.statusCode).toBe(422);
+      expect(res.body).toMatch(/data-testid="env-delete-name"[^>]*data-name="staging"/);
+    });
+
     it('answers 404 to a repeated delete of the same server', async () => {
       const edge = await edgeServer();
       expect((await post(`/settings/servers/${edge.id}/delete`, { confirm_name: 'edge' })).statusCode).toBe(303);
