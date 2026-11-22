@@ -40,6 +40,7 @@ export default {
     'cli.busy.wait': 'Оточення зайняте, повтор через {s}…',
     'cli.unreachable': "Не вдалося з'єднатися із сервером MicroRun.",
     'cli.usage': usage('Використання'),
+    'cli.streamClosed': 'Потік подій закрито до завершення; операція {op} може ще виконуватися.',
   },
   en: {
     'codes.ALREADY_ACTIVE': 'Commit {sha} is already active on {env}. Nothing to do.',
@@ -77,6 +78,7 @@ export default {
     'cli.busy.wait': 'Environment is busy, retrying in {s}…',
     'cli.unreachable': 'Cannot reach the MicroRun server.',
     'cli.usage': usage('Usage'),
+    'cli.streamClosed': 'Event stream closed before completion; operation {op} may still be running.',
   },
   de: {
     'codes.ALREADY_ACTIVE': 'Commit {sha} ist auf {env} bereits aktiv. Nichts zu tun.',
@@ -120,6 +122,7 @@ export default {
     'cli.busy.wait': 'Umgebung ist beschäftigt, neuer Versuch in {s}…',
     'cli.unreachable': 'MicroRun-Server nicht erreichbar.',
     'cli.usage': usage('Verwendung'),
+    'cli.streamClosed': 'Ereignisstrom vor Abschluss geschlossen; Operation {op} läuft möglicherweise noch.',
   },
   fr: {
     'codes.ALREADY_ACTIVE': 'Le commit {sha} est déjà actif sur {env}. Rien à faire.',
@@ -165,6 +168,7 @@ export default {
     'cli.busy.wait': "L'environnement est occupé, nouvelle tentative dans {s}…",
     'cli.unreachable': 'Serveur MicroRun injoignable.',
     'cli.usage': usage('Utilisation'),
+    'cli.streamClosed': "Flux d'événements fermé avant la fin ; l'opération {op} peut encore être en cours.",
   },
   es: {
     'codes.ALREADY_ACTIVE': 'El commit {sha} ya está activo en {env}. No hay nada que hacer.',
@@ -208,6 +212,7 @@ export default {
     'cli.busy.wait': 'El entorno está ocupado, reintentando en {s}…',
     'cli.unreachable': 'No se puede conectar con el servidor de MicroRun.',
     'cli.usage': usage('Uso'),
+    'cli.streamClosed': 'Flujo de eventos cerrado antes de completarse; la operación {op} puede seguir en ejecución.',
   },
   'pt-BR': {
     'codes.ALREADY_ACTIVE': 'O commit {sha} já está ativo em {env}. Nada a fazer.',
@@ -251,6 +256,7 @@ export default {
     'cli.busy.wait': 'O ambiente está ocupado, nova tentativa em {s}…',
     'cli.unreachable': 'Não foi possível conectar ao servidor MicroRun.',
     'cli.usage': usage('Uso'),
+    'cli.streamClosed': 'Fluxo de eventos encerrado antes da conclusão; a operação {op} ainda pode estar em execução.',
   },
   pl: {
     'codes.ALREADY_ACTIVE': 'Commit {sha} jest już aktywny na {env}. Nic do zrobienia.',
@@ -293,6 +299,7 @@ export default {
     'cli.busy.wait': 'Środowisko jest zajęte, ponowna próba za {s}…',
     'cli.unreachable': 'Nie można połączyć się z serwerem MicroRun.',
     'cli.usage': usage('Użycie'),
+    'cli.streamClosed': 'Strumień zdarzeń zamknięto przed zakończeniem; operacja {op} może nadal trwać.',
   },
   'zh-CN': {
     'codes.ALREADY_ACTIVE': '提交 {sha} 已在 {env} 上处于活动状态，无需操作。',
@@ -328,5 +335,6 @@ export default {
     'cli.busy.wait': '环境正忙，将在 {s} 后重试…',
     'cli.unreachable': '无法连接到 MicroRun 服务器。',
     'cli.usage': usage('用法'),
+    'cli.streamClosed': '事件流在完成前已关闭；操作 {op} 可能仍在运行。',
   },
 } satisfies Catalog;

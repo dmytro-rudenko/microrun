@@ -156,6 +156,20 @@ describe('number, unit and duration formatting', () => {
     expect(i18n('en').left(5 * 36e5)).toBe('5 hours');
   });
 
+  test('left under one hour shows minutes', () => {
+    expect(i18n('uk').left(25 * 60e3)).toBe('25 хвилин');
+    expect(i18n('en').left(59 * 60e3)).toBe('59 minutes');
+  });
+
+  test('left under one minute shows at least one minute', () => {
+    expect(i18n('en').left(30e3)).toBe('1 minute');
+    expect(i18n('en').left(0)).toBe('1 minute');
+  });
+
+  test('left at exactly one hour shows hours', () => {
+    expect(i18n('en').left(36e5)).toBe('1 hour');
+  });
+
   test('lang is exposed on the instance', () => {
     expect(i18n('pt-BR').lang).toBe('pt-BR');
   });

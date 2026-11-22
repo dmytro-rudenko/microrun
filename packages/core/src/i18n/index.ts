@@ -98,6 +98,7 @@ export function i18n(lang: Lang): I18n {
   };
 
   const left = (ms: number) => {
+    if (ms < 36e5) return unit(Math.max(1, Math.ceil(ms / 60e3)), 'minute');
     const d = Math.floor(ms / 864e5);
     const h = Math.floor((ms % 864e5) / 36e5);
     if (d === 0) return unit(h, 'hour');
