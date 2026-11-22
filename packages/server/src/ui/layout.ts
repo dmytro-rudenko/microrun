@@ -10,7 +10,7 @@ const HTMX_CONFIG = {
   ],
 };
 
-export function layout(p: { i: I18n; title: string; csrf: string; body: Html; q?: string }): string {
+export function layout(p: { i: I18n; title: string; csrf: string; body: Html; q?: string; only?: 'all' | 'prod' }): string {
   const { i } = p;
   return html`<!doctype html>
 <html lang="${i.lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -22,9 +22,10 @@ export function layout(p: { i: I18n; title: string; csrf: string; body: Html; q?
 <header class="sticky top-0 z-10 border-b border-line bg-surface py-2.5">
 <div class="top-in mx-auto flex max-w-[1320px] flex-wrap items-center gap-x-3.5 gap-y-2.5 px-4 min-[761px]:flex-nowrap">
 <a href="/" class="mr-3 text-ink no-underline"><b class="font-mono text-base"><span class="text-accent">▍</span>microrun</b></a>
-<form method="get" action="/" role="search" hx-get="/" hx-trigger="input changed delay:250ms from:find input, search from:find input" hx-target="#home" hx-select="#home" hx-swap="outerHTML" hx-push-url="true" class="relative order-3 basis-full min-[761px]:order-none min-[761px]:basis-auto min-[761px]:max-w-[440px] min-[761px]:flex-1">
+<form method="get" action="/" role="search" hx-get="/" hx-trigger="input[!!document.getElementById('home')] changed delay:250ms from:find input, search[!!document.getElementById('home')] from:find input" hx-target="#home" hx-select="#home" hx-swap="outerHTML" hx-push-url="true" class="relative order-3 basis-full min-[761px]:order-none min-[761px]:basis-auto min-[761px]:max-w-[440px] min-[761px]:flex-1">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" class="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-mute"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>
 <input type="search" name="q" data-testid="search" value="${p.q ?? ''}" aria-label="${i.t('search.label')}" placeholder="${i.t('search.placeholder')}" class="${CONTROL} pl-9">
+${p.only === 'prod' && html`<input type="hidden" name="only" value="prod">`}
 </form>
 <form method="post" action="/lang" class="ml-auto"><input type="hidden" name="_csrf" value="${p.csrf}">
 ${select({
