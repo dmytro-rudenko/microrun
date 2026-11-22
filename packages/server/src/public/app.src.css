@@ -1,0 +1,92 @@
+@import "tailwindcss" source(none);
+@source "../ui";
+
+:root {
+  --bg: #f6f7f9;
+  --surface: #fff;
+  --card: #fff;
+  --field: #fff;
+  --ink: #1b1f24;
+  --mute: #6a737d;
+  --line: #e1e4e8;
+  --accent: #2f6feb;
+  --on-accent: #fff;
+  --ring: rgba(47, 111, 235, .22);
+  --prod: #c62828;
+  --prod-soft: #fdecea;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --warn-soft: #fff8c5;
+  --code: #f3f4f6;
+  --console-bg: #0b1016;
+  --console-ink: #d8e1ec;
+  --console-mute: #6f7d8f;
+  --console-line: #1e2834;
+  --console-ok: #3fb950;
+  --console-accent: #58a6ff;
+  --console-warn: #d29922;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1419;
+    --surface: #161c23;
+    --card: #1c242d;
+    --field: #0f1419;
+    --ink: #e6edf3;
+    --mute: #8b949e;
+    --line: #2d3640;
+    --accent: #58a6ff;
+    --on-accent: #04121f;
+    --ring: rgba(88, 166, 255, .25);
+    --prod: #ff6b6b;
+    --prod-soft: rgba(255, 107, 107, .12);
+    --ok: #3fb950;
+    --warn: #d29922;
+    --warn-soft: rgba(210, 153, 34, .12);
+    --code: #0f1419;
+    --console-bg: #070a0e;
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-card: var(--card);
+  --color-field: var(--field);
+  --color-ink: var(--ink);
+  --color-mute: var(--mute);
+  --color-line: var(--line);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+  --color-ring: var(--ring);
+  --color-prod: var(--prod);
+  --color-prod-soft: var(--prod-soft);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-code: var(--code);
+  --color-console-bg: var(--console-bg);
+  --color-console-ink: var(--console-ink);
+  --color-console-mute: var(--console-mute);
+  --color-console-line: var(--console-line);
+  --color-console-ok: var(--console-ok);
+  --color-console-accent: var(--console-accent);
+  --color-console-warn: var(--console-warn);
+  --font-sans: Inter, system-ui, sans-serif;
+  --font-display: "Space Grotesk", Inter, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+#panel{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);background:var(--surface);border-left:1px solid var(--line);transform:translateX(100%);visibility:hidden;transition:transform .2s,visibility .2s;overflow-y:auto;z-index:5;box-shadow:-10px 0 30px rgba(0,0,0,.12)}
+#panel:not(:empty){transform:none;visibility:visible}
+#panel:has(.in.prod){border-left:4px solid var(--prod)}
+@media (min-width:1100px){body:has(#panel:not(:empty)) main{margin-right:440px}}
+.tl{position:relative;padding-left:18px}
+.tl::before{content:'';position:absolute;left:5px;top:6px;bottom:6px;width:2px;background:var(--line)}
+.rel::before{content:'';position:absolute;left:-18px;top:14px;width:12px;height:12px;border-radius:50%;background:var(--line);border:2px solid var(--surface)}
+.rel.active::before{background:var(--ok)} .rel.available::before{background:var(--accent)} .rel.blocked::before{background:var(--prod)} .rel.failed::before{background:var(--warn)}
+@keyframes led{50%{opacity:.25}}
+.led{animation:led 1.6s steps(2) infinite}.led:nth-child(2n){animation-delay:.4s}.led:nth-child(3n){animation-delay:.9s}
+@media (prefers-reduced-motion:reduce){.led{animation:none}}

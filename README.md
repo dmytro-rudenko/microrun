@@ -193,6 +193,7 @@ The admin sees the record count for each rule and confirms the cleanup in the UI
 
 ```sh
 pnpm install
+pnpm --filter @microrun/server dev:css   # rebuild the stylesheet on change
 pnpm -r build
 pnpm test          # unit and integration tests
 pnpm test:docker   # agent tests against a real Docker engine
