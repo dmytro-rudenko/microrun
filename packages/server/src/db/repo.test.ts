@@ -182,4 +182,77 @@ describe('Repo', () => {
 
     expect(await repo.listServers()).toEqual([]);
   });
+
+  describe('deleteServer', () => {
+    it('refuses the builtin server', async () => {
+      const s = await repo.createServer({ name: 'local', agentTokenHash: 'h', builtin: true });
+
+      expect(await repo.deleteServer(s.id)).toBe('builtin');
+      expect(await repo.getServer(s.id)).not.toBeNull();
+    });
+
+    it('refuses a server that still has environments', async () => {
+      const s = await mkServer();
+      await mkEnv(s.id, 'staging', 'develop');
+
+      expect(await repo.deleteServer(s.id)).toBe('has-envs');
+      expect(await repo.getServer(s.id)).not.toBeNull();
+    });
+
+    it('deletes a bare server, then reports it missing', async () => {
+      const s = await mkServer();
+
+      expect(await repo.deleteServer(s.id)).toBe('deleted');
+      expect(await repo.getServer(s.id)).toBeNull();
+      expect(await repo.deleteServer(s.id)).toBe('missing');
+    });
+  });
+
+  describe('deleteEnv', () => {
+    it('refuses an environment with a running operation', async () => {
+      const s = await mkServer();
+      const env = await mkEnv(s.id, 'staging', 'develop');
+      await repo.createOperation(newOperation(env.id, 'running'));
+
+      expect(await repo.deleteEnv(env.id)).toBe('busy');
+      expect(await repo.getEnv(env.id)).not.toBeNull();
+    });
+
+    it('deletes the environment with its releases, operations and approvals, then reports it missing', async () => {
+      const s = await mkServer();
+      const env = await mkEnv(s.id, 'staging', 'develop');
+      const op = await repo.createOperation({ ...newOperation(env.id), status: 'succeeded' });
+      const rel = await repo.insertRelease(newRelease(env.id, 'aaa', 'available'));
+      await db('releases').where({ id: rel.id }).update({ blocked_by_op: op.id });
+      await repo.putApproval({ envId: env.id, commitSha: 'aaa', diff: { destructive: ['drop users.age'] }, approvedAt: 2000 });
+
+      expect(await repo.deleteEnv(env.id)).toBe('deleted');
+      expect(await repo.getEnv(env.id)).toBeNull();
+      for (const t of ['destructive_approvals', 'releases', 'operations']) {
+        expect(await db(t).where({ env_id: env.id })).toEqual([]);
+      }
+      expect(await repo.deleteEnv(env.id)).toBe('missing');
+    });
+  });
+
+  it('findEnvByMarker returns the env carrying the marker, otherwise null', async () => {
+    const s = await mkServer();
+    const env = await mkEnv(s.id, 'staging', 'develop');
+
+    expect(await repo.findEnvByMarker('marker-1')).toBeNull();
+    await repo.setEnvMarker(env.id, 'marker-1');
+    expect((await repo.findEnvByMarker('marker-1'))?.id).toBe(env.id);
+    expect(await repo.findEnvByMarker('marker-2')).toBeNull();
+  });
+
+  it('countEnvsOnServer counts the environments on that server', async () => {
+    const s = await mkServer();
+    const other = await mkServer('other');
+    await mkEnv(other.id, 'elsewhere', 'feature');
+
+    expect(await repo.countEnvsOnServer(s.id)).toBe(0);
+    await mkEnv(s.id, 'staging', 'develop');
+    await mkEnv(s.id, 'prod', 'main');
+    expect(await repo.countEnvsOnServer(s.id)).toBe(2);
+  });
 });

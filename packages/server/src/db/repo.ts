@@ -238,6 +238,38 @@ export class Repo {
     await this.db('environments').where({ id }).update({ db_marker_id: markerId });
   }
 
+  async findEnvByMarker(markerId: string): Promise<EnvRow | null> {
+    return firstOf<EnvRow>(this.db('environments').where({ db_marker_id: markerId }), ENV);
+  }
+
+  async countEnvsOnServer(serverId: string): Promise<number> {
+    const row = (await this.db('environments').where({ server_id: serverId }).count({ n: '*' }).first()) as
+      | { n: number | string }
+      | undefined;
+    return Number(row?.n ?? 0);
+  }
+
+  async deleteServer(id: string): Promise<'deleted' | 'builtin' | 'has-envs' | 'missing'> {
+    return this.tx(async (r) => {
+      const server = await r.getServer(id);
+      if (!server) return 'missing';
+      if (server.builtin) return 'builtin';
+      if (await r.countEnvsOnServer(id)) return 'has-envs';
+      await r.db('servers').where({ id }).delete();
+      return 'deleted';
+    });
+  }
+
+  async deleteEnv(id: string): Promise<'deleted' | 'busy' | 'missing'> {
+    return this.tx(async (r) => {
+      if (!(await r.getEnv(id))) return 'missing';
+      if (await r.db('operations').where({ env_id: id }).whereIn('status', ['pending', 'running']).first()) return 'busy';
+      for (const t of ['destructive_approvals', 'releases', 'operations']) await r.db(t).where({ env_id: id }).delete();
+      await r.db('environments').where({ id }).delete();
+      return 'deleted';
+    });
+  }
+
   private releases() {
     return this.db('releases as r')
       .join('environments as e', 'e.id', 'r.env_id')
