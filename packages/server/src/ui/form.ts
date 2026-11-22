@@ -30,7 +30,7 @@ export const input = (p: {
   attrs?: Html;
 }): Html => {
   const cls = CONTROL + (p.invalid ? ' border-prod' : '') + (p.cls ? ` ${p.cls}` : '');
-  return html`<input name="${p.name}" type="${p.type ?? 'text'}"${attr('id', p.id)}${attr('value', p.value)}${flag('required', p.required)}${attr(
+  return html`<input name="${p.name}"${attr('value', p.value)} type="${p.type ?? 'text'}"${attr('id', p.id)}${flag('required', p.required)}${attr(
     'autocomplete',
     p.autocomplete,
   )}${attr('placeholder', p.placeholder)}${attr('data-testid', p.testid)} class="${cls}"${p.attrs}>`;
@@ -39,8 +39,10 @@ export const input = (p: {
 export const textarea = (p: { name: string; id?: string; value?: string; rows?: number }): Html =>
   html`<textarea name="${p.name}"${attr('id', p.id)} rows="${p.rows ?? 3}" class="${CONTROL} font-mono">${p.value ?? ''}</textarea>`;
 
+const SELECT = `${CONTROL} pr-10`;
+
 const SELECT_COMPACT =
-  'rounded-md border border-line bg-field py-1.5 pl-2.5 pr-8 text-sm text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-ring';
+  'rounded-md border border-line bg-field py-1.5 pl-2.5 pr-9 text-sm text-ink focus:border-accent focus:outline-none focus:ring-4 focus:ring-ring';
 
 export const select = (p: {
   name: string;
@@ -51,12 +53,12 @@ export const select = (p: {
   compact?: boolean;
   attrs?: Html;
 }): Html =>
-  html`<select name="${p.name}"${attr('id', p.id)}${attr('data-testid', p.testid)} class="${p.compact ? SELECT_COMPACT : CONTROL}"${p.attrs}>${p.options.map(
+  html`<select name="${p.name}"${attr('id', p.id)}${attr('data-testid', p.testid)} class="${p.compact ? SELECT_COMPACT : SELECT}"${p.attrs}>${p.options.map(
     (o) => html`<option value="${o.value}"${flag('selected', o.value === p.current)}>${o.label}</option>`,
   )}</select>`;
 
 export const checkbox = (p: { name: string; id?: string; checked: boolean; label?: Html; attrs?: Html }): Html => {
-  const box = html`<input type="checkbox" name="${p.name}"${attr('id', p.id)}${flag('checked', p.checked)} class="size-4 rounded border-line accent-accent focus:ring-2 focus:ring-ring"${p.attrs}>`;
+  const box = html`<input type="checkbox" name="${p.name}"${attr('id', p.id)}${flag('checked', p.checked)} class="size-4 rounded border-line bg-field text-accent focus:ring-2 focus:ring-ring focus:ring-offset-0"${p.attrs}>`;
   return p.label ? html`<label class="inline-flex items-center gap-2 text-sm text-ink">${box}${p.label}</label>` : box;
 };
 
