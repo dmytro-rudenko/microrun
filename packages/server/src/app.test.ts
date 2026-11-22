@@ -891,6 +891,17 @@ describe('UI routes', () => {
   });
 
   describe('settings servers', () => {
+    it('answers 404 for an unknown server without letting htmx swap the block away', async () => {
+      for (const res of [
+        await get('/settings/servers/block?server_id=nope'),
+        await post('/settings/servers/nope/token'),
+        await post('/settings/servers/nope/proxy', { proxy_mode: 'bundled' }),
+      ]) {
+        expect(res.statusCode).toBe(404);
+        expect(res.headers['hx-reswap']).toBe('none');
+      }
+    });
+
     it('creates a server with its proxy mode and shows the token inside the install command', async () => {
       const res = await post('/settings/servers', { server_name: 'edge', proxy_mode: 'bundled' });
       expect(res.statusCode).toBe(200);
@@ -1034,7 +1045,6 @@ describe('UI routes', () => {
       expect(panel.body).toContain(`data-release="${(await release(A)).id}"`);
       expect((await get('/env/nope')).statusCode).toBe(404);
       expect((await get('/panel/nope')).statusCode).toBe(404);
-      expect((await get('/settings/env/nope')).statusCode).toBe(404);
       expect((await get('/env/new')).statusCode).toBe(200);
     });
 

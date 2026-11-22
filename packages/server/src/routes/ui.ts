@@ -192,6 +192,8 @@ const agentCommand = (d: AppDeps, token: string) =>
 
 const isProxyMode = (m: string): m is ServerRow['proxyMode'] => m === 'external' || m === 'bundled';
 
+const noBlock = (reply: FastifyReply) => reply.code(404).header('HX-Reswap', 'none').send();
+
 async function blockFor(
   d: AppDeps,
   req: FastifyRequest,
@@ -461,7 +463,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
 
   app.get<{ Querystring: { server_id?: string } }>('/settings/servers/block', async (req, reply) => {
     const server = await repo.getServer(req.query.server_id ?? '');
-    if (!server) return reply.code(404).send();
+    if (!server) return noBlock(reply);
     return sendHtml(reply, await blockFor(d, req, server.id));
   });
 
@@ -482,7 +484,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
 
   app.post<{ Params: { id: string } }>('/settings/servers/:id/token', async (req, reply) => {
     const server = await repo.getServer(req.params.id);
-    if (!server || server.builtin) return reply.code(404).send();
+    if (!server || server.builtin) return noBlock(reply);
     const token = newToken();
     await repo.updateServer(server.id, { agentTokenHash: hashToken(token) });
     d.hub.disconnect(server.id);
@@ -491,7 +493,7 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
 
   app.post<{ Params: { id: string } }>('/settings/servers/:id/proxy', async (req, reply) => {
     const server = await repo.getServer(req.params.id);
-    if (!server) return reply.code(404).send();
+    if (!server) return noBlock(reply);
     const mode = field(bodyOf(req), 'proxy_mode');
     if (isProxyMode(mode)) await repo.updateServer(server.id, { proxyMode: mode });
     return sendHtml(reply, await blockFor(d, req, server.id));
