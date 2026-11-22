@@ -38,6 +38,7 @@ function release(over: Partial<ReleaseVM> = {}): ReleaseVM {
     activationSeq: null,
     imagePurged: false,
     stored: true,
+    storing: false,
     cleanupFailed: null,
     ...over,
   };

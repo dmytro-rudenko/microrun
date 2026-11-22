@@ -1053,6 +1053,16 @@ describe('UI routes', () => {
       expect((await get(`/panel/${relA.id}`)).body).toContain(warn);
     });
 
+    it('does not warn about storage while the deploy of that release is still running', async () => {
+      await deploy(A);
+      const relA = await release(A);
+      const warn = en.t('storage.failedWarn');
+      await db('releases').where({ id: relA.id }).update({ stored: 0 });
+      await db('operations').where({ to_release_id: relA.id, kind: 'deploy' }).update({ status: 'running', finished_at: null });
+      expect((await get('/')).body).not.toContain(warn);
+      expect((await get(`/panel/${relA.id}`)).body).not.toContain(warn);
+    });
+
     it('reads at most 200 operations per env to render the board and a panel', async () => {
       await deploy(A);
       const spy = vi.spyOn(repo, 'listOperations');
