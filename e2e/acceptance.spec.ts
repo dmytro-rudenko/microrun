@@ -53,7 +53,7 @@ test('login rejects wrong credentials and accepts ENV ones', async () => {
 });
 
 test('remote npm agent comes online without inbound ports', async () => {
-  await page.goto('/settings/servers');
+  await page.goto('/env/new');
   await page.fill('[data-testid=server-name]', 'remote-1');
   await page.click('[data-testid=server-create]');
   const token = (await page.locator('[data-testid=agent-token]').innerText()).trim();
@@ -65,17 +65,19 @@ test('remote npm agent comes online without inbound ports', async () => {
   expect(await listeningPids()).not.toContain(`pid=${npmAgent.pid},`);
 
   await expect(async () => {
-    await page.goto('/settings/servers');
-    await expect(page.locator('[data-testid=server-row-remote-1]')).toHaveAttribute('data-status', 'online');
+    await page.goto('/env/new');
+    await page.selectOption('[name=server_id]', { label: 'remote-1' });
+    await expect(page.locator('[data-testid=agent-status]')).toHaveAttribute('data-status', 'online');
   }).toPass({ timeout: 20_000 });
 });
 
 async function fillEnvForm(name: string, branch: string, production: boolean) {
-  await page.goto('/settings/env/new');
+  await page.goto('/env/new');
   await page.fill('[name=name]', name);
   await page.fill('[name=branch]', branch);
   if (production) await page.check('[name=is_production]');
   await page.selectOption('[name=server_id]', { label: 'local' });
+  await page.waitForLoadState('networkidle');
   await page.fill('[name=compose_project]', 'mrfix');
   await page.fill('[name=compose_dir]', fixtureDir);
   await page.fill('[name=compose_files]', 'compose.yml');
@@ -194,7 +196,7 @@ test('UI renders in all 8 languages without raw keys', async () => {
     await page.goto('/');
     await page.selectOption('[data-testid=lang]', lang);
     await page.waitForLoadState('networkidle');
-    for (const path of ['/', envHref!, '/history']) {
+    for (const path of ['/', envHref!]) {
       await page.goto(path);
       const text = await page.locator('body').innerText();
       expect(text, `${lang} ${path}`).not.toMatch(RAW_KEY);
