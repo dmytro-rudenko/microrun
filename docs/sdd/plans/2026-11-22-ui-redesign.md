@@ -179,8 +179,8 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
   - `envStatuses(): Promise<Map<string, { latest: ReleaseRow | null; active: ReleaseRow | null; lastOp: OperationRow | null }>>`
   - `envIdsWithShaPrefix(q: string): Promise<Set<string>>`
 
-- [ ] **Step 1: run the target, watch it fail** — `pnpm vitest run packages/server/src/db/repo-feed.test.ts`, expect `repo.listRecentReleases is not a function`.
-- [ ] **Step 2: migration** — `004_scale_indexes.ts`, same shape as `003_compose_env_files.ts`:
+- [x] **Step 1: run the target, watch it fail** — `pnpm vitest run packages/server/src/db/repo-feed.test.ts`, expect `repo.listRecentReleases is not a function`.
+- [x] **Step 2: migration** — `004_scale_indexes.ts`, same shape as `003_compose_env_files.ts`:
   ```ts
   import type { Knex } from 'knex';
   export async function up(knex: Knex): Promise<void> {
@@ -195,11 +195,11 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
   }
   ```
   Register in `db.ts`: `import * as scaleIndexes from './migrations/004_scale_indexes.ts'` and add `'004_scale_indexes': scaleIndexes` to the `migrations` map after `'003_compose_env_files'`.
-- [ ] **Step 3: queries in `repo.ts`**, built on the private `releases()` builder (`repo.ts:279`, joins `environments as e`) and `allOf`/`fromDb` with `RELEASE`/`OPERATION` shapes:
+- [x] **Step 3: queries in `repo.ts`**, built on the private `releases()` builder (`repo.ts:279`, joins `environments as e`) and `allOf`/`fromDb` with `RELEASE`/`OPERATION` shapes:
   - `listRecentReleases`: base = `this.releases().select('e.name as env_name', 'e.is_production as env_is_production')`; `productionOnly` → `where('e.is_production', 1)`; `q` non-empty → `where(b => b.where('e.name', 'like', pat).orWhere('e.branch', 'like', pat).orWhere('r.commit_sha', 'like', pre))` with `pat = '%' + escLike(q) + '%'`, `pre = escLike(q) + '%'`, each with `escape '\\'` via `knex.raw('? escape ?', …)` or `whereRaw("e.name like ? escape '\\'", [pat])`; `escLike = (s) => s.replace(/[\\%_]/g, (c) => '\\' + c)`. Cursor → `whereRaw('(r.deployed_at < ? or (r.deployed_at = ? and r.id < ?))', [at, at, id])`. Rows: `.orderBy([{ column: 'r.deployed_at', order: 'desc' }, { column: 'r.id', order: 'desc' }]).limit(limit)`; map with `fromDb(row, RELEASE)` plus `envName: row.env_name`, `envIsProduction: !!row.env_is_production`. `rest` = `count(*)` of the same filtered query (same cursor) minus `rows.length`, never below 0.
   - `envStatuses`: three raw queries with `row_number() over (partition by env_id order by …) as rn … where rn = 1`: latest release (`order by deployed_at desc, id desc`), active (`where state = 'active'`, unique per env), latest finished operation (`where status not in ('pending','running') order by started_at desc, id desc`). Release rows go through the same `has_cleanup_cmd` join as `releases()` (or set `hasCleanupCmd` via a join in the raw SQL). Map every env id from `listEnvs()` (envs without rows get `null`s).
   - `envIdsWithShaPrefix(q)`: `select distinct env_id from releases where commit_sha like ? escape '\'` with `escLike(q) + '%'`; empty `q` → empty set.
-- [ ] **Step 4: run it, watch it pass** — `pnpm vitest run packages/server/src/db/repo-feed.test.ts packages/server/src/db/repo.test.ts`, expect all passed.
+- [x] **Step 4: run it, watch it pass** — `pnpm vitest run packages/server/src/db/repo-feed.test.ts packages/server/src/db/repo.test.ts`, expect all passed.
 
 ---
 
@@ -213,13 +213,13 @@ Serialized on purpose: Tasks 3, 4, 5 and 6 all edit `packages/server/src/ui/view
 **Interfaces:**
 - Produces keys (all 8 languages: `en, uk, de, fr, es, pt-BR, pl, zh-CN`; non-English translated by meaning, `uk` with `one/few/many/other` plurals, others per `Intl.PluralRules` categories they use).
 
-- [ ] **Step 1: change English values** in `catalogs/ui.ts` `en` block and translate the same change in the 7 other blocks:
+- [x] **Step 1: change English values** in `catalogs/ui.ts` `en` block and translate the same change in the 7 other blocks:
   `state.active` Live · `state.available` Can roll back · `state.blocked` Rolled back · `state.expired` Window closed · `env.prodTag` Production · `env.newEnv` New environment · `env.back` ← Overview · `rb.willBlock` After the rollback, these commits can’t be deployed again: · `rb.schema` The database schema stays as it is. No data is deleted. · `rb.noMarker` Rollback is unavailable until the database mismatch is fixed. · `rb.noAgent` Rollback is unavailable: the agent on server {server} is offline. · `note.blocked` Rolled back to {to} {at}. Deploying this commit again is refused; push the fix as a new commit. · `approve.title` The migration removes a column · `approve.text` The deploy of {sha} was stopped because its migration removes {col}. Approval lets the next deploy of this commit remove it, once; run the deploy again from CI. · `cl.sub` Optional. The rollback is already done. Counts come from a dry run of your cleanup command. · `cl.skip` Keep the data.
   (The `·` only separates entries here; it is not part of any value.)
-- [ ] **Step 2: add keys** (English value → translate):
+- [x] **Step 2: add keys** (English value → translate):
   `home.feed` Latest deploys · `home.envs` All environments · `home.filterAll` All · `home.filterProd` Production · `home.other` Other environments · `home.more` Show 25 more · `home.notShown` `{ one: '{n} not shown', other: '{n} not shown' }` · `home.feedEmpty` Nothing deployed yet. Deploys from CI appear here. · `home.dot.ok` Running normally · `home.dot.warn` Needs a look · `home.dot.mismatch` Connected to another environment’s database · `home.dot.offline` Agent offline · `search.placeholder` Search environments, branches or commits · `search.label` Search · `search.none` No environment, branch or commit matches “{q}”. · `search.clear` Clear search · `env.newEnvShort` New · `env.inWindow` Within the rollback window · `env.older` Older releases · `env.olderHint` Kept as a record. You can’t roll back to them. · `env.showOlder` `{ one: 'Show {n} older', other: 'Show {n} older' }` · `rb.ask` Roll back production {env} to {sha}? · `rb.yes` Yes, roll back · `approve.ask` Allow {sha} to remove {col} in production? · `approve.yes` Yes, approve · `confirm.cancel` Cancel.
-- [ ] **Step 3: fix value assertions** — if any test in `packages/core/src/i18n/i18n.test.ts` asserts an old English/Ukrainian value changed in Step 1 (grep for `Active`, `PRODUCTION`, `Rollback closed`, `Will be blocked`), update it to the new value.
-- [ ] **Step 4: run** — `pnpm vitest run packages/core`, expect all passed (key-parity test included).
+- [x] **Step 3: fix value assertions** — if any test in `packages/core/src/i18n/i18n.test.ts` asserts an old English/Ukrainian value changed in Step 1 (grep for `Active`, `PRODUCTION`, `Rollback closed`, `Will be blocked`), update it to the new value.
+- [x] **Step 4: run** — `pnpm vitest run packages/core`, expect all passed (key-parity test included).
 
 ---
 
