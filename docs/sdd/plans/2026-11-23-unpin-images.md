@@ -345,8 +345,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 **Interfaces:**
 - Produces: `ReleaseFacts.imageUnpinnedAt: number | null`; `export type UnpinFacts = ReleaseFacts & { stored: boolean; images: Record<string, { ref: string }> }`; `export function dueUnpin(rs: UnpinFacts[]): string[]`; `export function unpinKeep(rs: UnpinFacts[], due: string[], id: string): string[]`. `ReleaseRow` (`packages/server/src/db/repo.ts:60`) satisfies `UnpinFacts` structurally.
 
-- [ ] **Step 1: run the core tests, watch them fail** — `pnpm vitest run packages/core/src/state.test.ts`, expect `dueUnpin is not a function`.
-- [ ] **Step 2: implement** in `packages/core/src/state.ts`:
+- [x] **Step 1: run the core tests, watch them fail** — `pnpm vitest run packages/core/src/state.test.ts`, expect `dueUnpin is not a function`.
+- [x] **Step 2: implement** in `packages/core/src/state.ts`:
   - in `interface ReleaseFacts` (:4-16) add `imageUnpinnedAt: number | null;` after `imagePurgedAt`;
   - `activate()` (:48-50) returns `{ id: releaseId, patch: { state: 'active', activationSeq: nextSeq(rs), supersededAt: null, imageUnpinnedAt: null } }`;
   - after `dueExpiry` (:104) add:
@@ -381,7 +381,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
     return [...own].filter((ref) => held.has(ref)).sort();
   }
   ```
-- [ ] **Step 3: run it, watch it pass** — `pnpm vitest run packages/core/src/state.test.ts`, expect all passed; `pnpm --filter @microrun/core typecheck` exits 0 (if the filter name differs, `pnpm -C packages/core typecheck`).
+- [x] **Step 3: run it, watch it pass** — `pnpm vitest run packages/core/src/state.test.ts`, expect all passed; `pnpm --filter @microrun/core typecheck` exits 0 (if the filter name differs, `pnpm -C packages/core typecheck`).
 
 ---
 
@@ -396,13 +396,13 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 **Interfaces:**
 - Produces: `Command` member `{ type: 'unpinImages'; env: string; sha: string; images: Record<string,string>; keep: string[] }`; `ResultMap['unpinImages'] = { unpinned: boolean }`; zod entry in `commandSchema`.
 
-- [ ] **Step 1: watch it fail** — `pnpm vitest run packages/core/src/protocol.test.ts`, expect `accepts unpinImages` failing.
-- [ ] **Step 2: implement** in `packages/core/src/protocol.ts`:
+- [x] **Step 1: watch it fail** — `pnpm vitest run packages/core/src/protocol.test.ts`, expect `accepts unpinImages` failing.
+- [x] **Step 2: implement** in `packages/core/src/protocol.ts`:
   - `Command` union (:44-46): after the `deleteImages` member add `| { type: 'unpinImages'; env: string; sha: string; images: Record<string,string>; keep: string[] }` (move the terminating `;`).
   - `ResultMap` (:58): `storeImages: {}; fetchImages: {}; deleteImages: {}; unpinImages: { unpinned: boolean };`
   - `commandSchema` (:111-113): after the `deleteImages` entry add `z.object({ type: z.literal('unpinImages'), env: z.string(), sha: z.string(), images: stringMap, keep: z.array(z.string()) }),`
   - `PROTOCOL_VERSION` stays `1`.
-- [ ] **Step 3: watch it pass** — same command, all passed.
+- [x] **Step 3: watch it pass** — same command, all passed.
 
 ---
 
@@ -417,8 +417,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 **Interfaces:**
 - Produces: column `releases.image_unpinned_at integer null`, read as `ReleaseRow.imageUnpinnedAt` via the generic mapping in `repo.ts:154-174` (no edit to `repo.ts`).
 
-- [ ] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/db/repo.test.ts`, expect the new test failing.
-- [ ] **Step 2: implement** — create `packages/server/src/db/migrations/005_image_unpinned_at.ts`:
+- [x] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/db/repo.test.ts`, expect the new test failing.
+- [x] **Step 2: implement** — create `packages/server/src/db/migrations/005_image_unpinned_at.ts`:
   ```ts
   import type { Knex } from 'knex';
 
@@ -431,7 +431,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
   }
   ```
   In `packages/server/src/db/db.ts` add `import * as imageUnpinnedAt from './migrations/005_image_unpinned_at.ts';` after the `004` import and `'005_image_unpinned_at': imageUnpinnedAt,` after `'004_scale_indexes': scaleIndexes,`.
-- [ ] **Step 3: watch it pass** — same command, all passed.
+- [x] **Step 3: watch it pass** — same command, all passed.
 
 ---
 
@@ -447,8 +447,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 - Consumes: existing `fetchImages` command (`protocol.ts:45`), `refs()` (`orchestrator.ts:67`), `this.call(env, opId, step, cmd)` (`orchestrator.ts:103-109`), `stepper(op).step` (`orchestrator.ts:359-381`).
 - Produces: private `fetchCmd(env: EnvRow, r: ReleaseRow)` returning the `fetchImages` command; used by rollback, reactivation and contract.
 
-- [ ] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/orchestrator.test.ts`, expect the reactivation and contract tests failing on step lists.
-- [ ] **Step 2: implement** in `packages/server/src/orchestrator.ts`:
+- [x] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/orchestrator.test.ts`, expect the reactivation and contract tests failing on step lists.
+- [x] **Step 2: implement** in `packages/server/src/orchestrator.ts`:
   - add a private method next to `storeRelease` (:489):
   ```ts
   private fetchCmd(env: EnvRow, r: ReleaseRow): CommandOf<'fetchImages'> {
@@ -465,7 +465,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
   - in `executeContract` (:607-625), inside the existing `try`, before `await step('contract', …)` add:
     `if (rel.stored) await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));`
     (inside the `try`, so a storage failure becomes `CONTRACT_FAILED` and the scheduler does not auto-retry it).
-- [ ] **Step 3: watch it pass** — same command, all passed (including the resume tests at :841-865, whose `fetch` step is replayed from `steps_done`).
+- [x] **Step 3: watch it pass** — same command, all passed (including the resume tests at :841-865, whose `fetch` step is replayed from `steps_done`).
 
 ---
 
