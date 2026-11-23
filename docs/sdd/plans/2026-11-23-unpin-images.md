@@ -481,8 +481,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 - Consumes: `CommandOf<'unpinImages'>` / `ResultMap['unpinImages']` (Task 2).
 - Produces: `export function unpinImages(env: string, sha: string, images: Record<string, string>, keep: string[]): Promise<{ unpinned: boolean }>` in `storage.ts`; `Layers.unpinImages` and `case 'unpinImages'` in `handler.ts`.
 
-- [ ] **Step 1: watch it fail** — `pnpm vitest run packages/agent/src/runtime.test.ts`, expect the new test failing.
-- [ ] **Step 2: implement** in `packages/agent/src/storage.ts`, replacing the rmi loop of `deleteImages` (:198-203) with a shared helper (reuse, do not copy):
+- [x] **Step 1: watch it fail** — `pnpm vitest run packages/agent/src/runtime.test.ts`, expect the new test failing.
+- [x] **Step 2: implement** in `packages/agent/src/storage.ts`, replacing the rmi loop of `deleteImages` (:198-203) with a shared helper (reuse, do not copy):
   ```ts
   async function removeLocal(env: string, sha: string, images: Record<string, string>, keep: string[] = []): Promise<boolean> {
     let removed = true;
@@ -507,7 +507,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
       case 'unpinImages':
         return L.unpinImages(cmd.env, cmd.sha, cmd.images, cmd.keep);
   ```
-- [ ] **Step 3: watch it pass** — `pnpm vitest run packages/agent/src/runtime.test.ts`, all passed; then `pnpm test:docker`, expect `storage.docker.test.ts` all passed (including the existing `deleteImages` tests).
+- [x] **Step 3: watch it pass** — `pnpm vitest run packages/agent/src/runtime.test.ts`, all passed; then `pnpm test:docker`, expect `storage.docker.test.ts` all passed (including the existing `deleteImages` tests).
 
 ---
 
@@ -522,8 +522,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 **Interfaces:**
 - Consumes: `dueUnpin`, `unpinKeep` (Task 1, `@microrun/core/state`); `unpinImages` command/result (Task 2); `imageUnpinnedAt` column (Task 3).
 
-- [ ] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/scheduler.test.ts`, expect the `Scheduler unpin` tests failing.
-- [ ] **Step 2: implement** in `packages/server/src/scheduler.ts`:
+- [x] **Step 1: watch it fail** — `pnpm vitest run packages/server/src/scheduler.test.ts`, expect the `Scheduler unpin` tests failing.
+- [x] **Step 2: implement** in `packages/server/src/scheduler.ts`:
   - import `dueUnpin, unpinKeep` alongside `dueExpiry` (:1);
   - after `store` (:93-106) add:
   ```ts
@@ -550,7 +550,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
   ```
   (use the same `this.log` and `message` helpers `purge`/`store` already use);
   - in `tickEnv` (:108-135), after `if (online) await this.store(env);` add `if (online) await this.unpin(env, now);`.
-- [ ] **Step 3: watch it pass** — `pnpm vitest run packages/server/src/scheduler.test.ts`, all passed; then `pnpm typecheck && pnpm test`, expect exit 0 and `Test Files  <n> passed (<n>)`.
+- [x] **Step 3: watch it pass** — `pnpm vitest run packages/server/src/scheduler.test.ts`, all passed; then `pnpm typecheck && pnpm test`, expect exit 0 and `Test Files  <n> passed (<n>)`.
 
 ---
 
