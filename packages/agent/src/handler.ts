@@ -8,7 +8,7 @@ import { docker } from './docker.ts';
 import { inspectEnv, runOneOff } from './compose.ts';
 import { switchServices, type ProxyHook } from './switch.ts';
 import { dryRunExpand, readMarkers, snapshotSchema, writeMarker } from './db.ts';
-import { deleteImages, fetchImages, pinImages, storeImages } from './storage.ts';
+import { deleteImages, fetchImages, pinImages, storeImages, unpinImages } from './storage.ts';
 import { bundledProxy } from './proxy.ts';
 
 export const AGENT_VERSION: string = pkg.version;
@@ -28,12 +28,13 @@ export interface Layers {
   fetchImages: typeof fetchImages;
   deleteImages: typeof deleteImages;
   pinImages: typeof pinImages;
+  unpinImages: typeof unpinImages;
   bundledProxy: (stateDir: string) => ProxyHook & { ensure(): Promise<void> };
 }
 
 const defaults: Layers = {
   inspectEnv, readMarkers, writeMarker, snapshotSchema, dryRunExpand, runOneOff,
-  switchServices, storeImages, fetchImages, deleteImages, pinImages, bundledProxy,
+  switchServices, storeImages, fetchImages, deleteImages, pinImages, unpinImages, bundledProxy,
 };
 
 const CACHE_MAX = 1000;
@@ -155,6 +156,8 @@ async function dispatch(L: Layers, run: DockerRun, proxyFor: ProxyFor, warning: 
     case 'deleteImages':
       await L.deleteImages(cmd.storage, cmd.env, cmd.sha, cmd.images);
       return {};
+    case 'unpinImages':
+      return L.unpinImages(cmd.env, cmd.sha, cmd.images, cmd.keep);
   }
 }
 
