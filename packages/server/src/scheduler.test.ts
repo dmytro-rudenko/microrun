@@ -532,6 +532,23 @@ describe('Scheduler unpin', () => {
     expect((await release(a.id)).imageUnpinnedAt).toBeNull();
   });
 
+  it('does not unpin when an operation for the env started during the tick', async () => {
+    const { env, a, b, d } = await seed();
+    await repo.patchReleases([{ id: d.id, patch: { stored: false } }]);
+    agent.handlers.unpinImages = () => ({ unpinned: true });
+    agent.handlers.storeImages = async () => {
+      await repo.createOperation({
+        envId: env.id, kind: 'rollback', fromReleaseId: null, toReleaseId: a.id, actor: 'test', status: 'running', startedAt: now,
+      });
+      return {};
+    };
+    await scheduler.tick();
+    expect(agent.of('storeImages').map((c) => c.sha)).toEqual(['ddd']);
+    expect(agent.of('unpinImages')).toEqual([]);
+    expect((await release(a.id)).imageUnpinnedAt).toBeNull();
+    expect((await release(b.id)).imageUnpinnedAt).toBeNull();
+  });
+
   it('does not call an offline agent', async () => {
     await seed();
     agent.online.delete(serverId);

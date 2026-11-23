@@ -761,6 +761,33 @@ describe('UI routes', () => {
       expect(await storageOf(stagingId)).toMatchObject({ kind: 's3', secretKey: '' });
     });
 
+    async function storedStagingRelease(sha: string) {
+      return repo.insertRelease({
+        envId: stagingId, commitSha: sha, images: { web: { ref: `reg/web:${sha}`, digest: `sha256:${sha}` } }, author: 'alice', message: `commit ${sha}`,
+        deployedAt: 1000, schemaSnapshot: { tables: [] }, schemaDiff: { changes: [] }, state: 'available', stored: true,
+      });
+    }
+
+    it('marks every release of the env unstored when its storage location changes', async () => {
+      const r = await storedStagingRelease('s1s1s1s1');
+      expect((await post('/settings/env', stagingBody({ storage_path: '/elsewhere' }))).statusCode).toBe(200);
+      expect(await storageOf(stagingId)).toMatchObject({ kind: 'local', path: '/elsewhere' });
+      expect((await repo.getRelease(r.id))!.stored).toBe(false);
+    });
+
+    it('keeps an already unpinned release stored when the storage location changes, since it has no local image to re-store', async () => {
+      const r = await storedStagingRelease('s3s3s3s3');
+      await repo.patchReleases([{ id: r.id, patch: { imageUnpinnedAt: 500 } }]);
+      expect((await post('/settings/env', stagingBody({ storage_path: '/elsewhere' }))).statusCode).toBe(200);
+      expect((await repo.getRelease(r.id))!.stored).toBe(true);
+    });
+
+    it('leaves stored untouched when the env is saved with the same storage', async () => {
+      const r = await storedStagingRelease('s2s2s2s2');
+      expect((await post('/settings/env', stagingBody({ branch: 'release' }))).statusCode).toBe(200);
+      expect((await repo.getRelease(r.id))!.stored).toBe(true);
+    });
+
     it('saves a rolling service whose healthcheck is still unknown and shows a non-blocking hint', async () => {
       inspected = [{ name: 'web', hasHealthcheck: null, hostPorts: [] }];
       const res = await post('/settings/env', stagingBody({ branch: 'release' }));

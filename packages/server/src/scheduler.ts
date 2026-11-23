@@ -110,6 +110,7 @@ export class Scheduler {
     const due = dueUnpin(rs);
     for (const id of due) {
       const r = rs.find((x) => x.id === id)!;
+      if ((await this.d.repo.activeOperations()).some((o) => o.envId === env.id)) return;
       try {
         const { unpinned } = await this.d.agent.call<'unpinImages'>(env.serverId, { opId: `unpin:${r.id}:${now}`, step: 'unpinImages' }, {
           type: 'unpinImages',

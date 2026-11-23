@@ -401,7 +401,7 @@ export class Orchestrator {
     const activated = 'activate' in op.stepsDone;
     const plan = (op.stepsDone.plan as { reactivate: boolean } | undefined) ?? { reactivate: rel.state === 'available' };
     if (!('plan' in op.stepsDone)) await this.repo.markStepDone(op.id, 'plan', plan);
-    if (plan.reactivate && rel.stored) await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));
+    if (plan.reactivate && rel.stored) await this.fetchRelease(op, env, rel, step);
 
     const pulled = await step('pull', async () =>
       this.call(env, op.id, 'pull', { type: 'pullImages', refs: [...new Set(Object.values(rel.images).map((i) => i.ref))] }),
@@ -494,6 +494,22 @@ export class Orchestrator {
     };
   }
 
+  private async fetchRelease(op: OperationRow, env: EnvRow, rel: ReleaseRow, step: Step): Promise<void> {
+    try {
+      await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));
+    } catch (e) {
+      if (e instanceof AgentError) await this.logStorageFailed(op.id, e);
+      throw e;
+    }
+    await this.repo.patchReleases([{ id: rel.id, patch: { imageUnpinnedAt: null } }]);
+  }
+
+  private async logStorageFailed(opId: string, e: unknown): Promise<void> {
+    const params = e instanceof AgentError ? e.params : {};
+    const detail = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(' ');
+    await this.log(opId, `STORAGE_FAILED: ${message('STORAGE_FAILED', params)}${detail ? ` (${detail})` : ''}`);
+  }
+
   private async storeRelease(op: OperationRow, env: EnvRow, rel: ReleaseRow, images: Images): Promise<{ stored: boolean }> {
     try {
       await this.call(env, op.id, 'store', {
@@ -502,9 +518,7 @@ export class Orchestrator {
       await this.repo.patchReleases([{ id: rel.id, patch: { stored: true } }]);
       return { stored: true };
     } catch (e) {
-      const params = e instanceof AgentError ? e.params : {};
-      const detail = Object.entries(params).map(([k, v]) => `${k}=${v}`).join(' ');
-      await this.log(op.id, `STORAGE_FAILED: ${message('STORAGE_FAILED', params)}${detail ? ` (${detail})` : ''}`);
+      await this.logStorageFailed(op.id, e);
       await this.repo.patchReleases([{ id: rel.id, patch: { stored: false } }]);
       return { stored: false };
     }
@@ -525,7 +539,7 @@ export class Orchestrator {
     const { step, once } = this.stepper(op);
     const target = (await this.repo.getRelease(op.toReleaseId!))!;
     await step('markers', async () => this.checkMarkers(op, env));
-    await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, target)));
+    await this.fetchRelease(op, env, target, step);
     const { services, proxyMode } = await this.services(env, target.images);
     await step('switch', async () =>
       this.call(env, op.id, 'switch', {
@@ -568,6 +582,7 @@ export class Orchestrator {
     const rules = apply ? String(op.params?.rules ?? '').split(',') : [];
     const args = apply ? ['--apply', `--rules=${rules.join(',')}`] : ['--dry-run'];
     const name = apply ? 'apply' : 'preview';
+    if (rel.stored) await this.fetchRelease(op, env, rel, step);
     const res = await step(name, async () => {
       const out = await this.call(env, op.id, name, {
         type: 'runCommand', compose: compose(env), service: env.migrationService, image: imageOf(rel.images[env.migrationService]!),
@@ -611,7 +626,7 @@ export class Orchestrator {
     const { step } = this.stepper(op);
     const rel = (await this.repo.getRelease(op.toReleaseId!))!;
     try {
-      if (rel.stored) await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));
+      if (rel.stored) await this.fetchRelease(op, env, rel, step);
       await step('contract', async () => {
         const out = await this.call(env, op.id, 'contract', {
           type: 'runCommand', compose: compose(env), service: env.migrationService, image: imageOf(rel.images[env.migrationService]!),

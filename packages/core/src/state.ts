@@ -124,14 +124,16 @@ export function dueUnpin(rs: UnpinFacts[]): string[] {
     .map((r) => r.id);
 }
 
+const normRef = (ref: string) => (ref.includes('@') || ref.slice(ref.lastIndexOf('/') + 1).includes(':') ? ref : `${ref}:latest`);
+
 export function unpinKeep(rs: UnpinFacts[], due: string[], id: string): string[] {
   const own = new Set(Object.values(rs.find((r) => r.id === id)?.images ?? {}).map((i) => i.ref));
   const held = new Set(
     rs
       .filter((r) => !due.includes(r.id) && r.imagePurgedAt === null && r.imageUnpinnedAt === null)
-      .flatMap((r) => Object.values(r.images).map((i) => i.ref)),
+      .flatMap((r) => Object.values(r.images).map((i) => normRef(i.ref))),
   );
-  return [...own].filter((ref) => held.has(ref)).sort();
+  return [...own].filter((ref) => ref.includes('@') || held.has(normRef(ref))).sort();
 }
 
 export function nextContract(rs: ReleaseFacts[]): string | null {

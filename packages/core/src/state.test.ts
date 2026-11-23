@@ -312,6 +312,35 @@ describe('unpinKeep', () => {
     expect(due).toEqual(['X']);
     expect(unpinKeep(rs, due, 'X')).toEqual(['app:prev']);
   });
+
+  it('always keeps the release own digest-qualified refs', () => {
+    const rs = [
+      u('A', 'active', { images: { web: { ref: 'reg/app:a' } } }),
+      u('P', 'available', { supersededAt: 300, images: { web: { ref: 'reg/app:p' } } }),
+      u('X', 'available', { supersededAt: 100, images: { web: { ref: 'reg/app@sha256:abc' }, worker: { ref: 'reg/app:x' } } }),
+    ];
+    const due = dueUnpin(rs);
+    expect(due).toEqual(['X']);
+    expect(unpinKeep(rs, due, 'X')).toEqual(['reg/app@sha256:abc']);
+  });
+
+  it('treats an untagged ref and its :latest spelling as the same tag, returning the due release spelling', () => {
+    const rs = [
+      u('A', 'active', { images: { web: { ref: 'reg/app' } } }),
+      u('P', 'available', { supersededAt: 300, images: { web: { ref: 'reg/app:p' } } }),
+      u('X', 'available', { supersededAt: 100, images: { web: { ref: 'reg/app:latest' } } }),
+    ];
+    expect(unpinKeep(rs, dueUnpin(rs), 'X')).toEqual(['reg/app:latest']);
+  });
+
+  it('treats a :latest ref and its untagged spelling as the same tag, returning the due release spelling', () => {
+    const rs = [
+      u('A', 'active', { images: { web: { ref: 'reg/app:latest' } } }),
+      u('P', 'available', { supersededAt: 300, images: { web: { ref: 'reg/app:p' } } }),
+      u('X', 'available', { supersededAt: 100, images: { web: { ref: 'reg/app' } } }),
+    ];
+    expect(unpinKeep(rs, dueUnpin(rs), 'X')).toEqual(['reg/app']);
+  });
 });
 
 describe('activation resets imageUnpinnedAt', () => {
