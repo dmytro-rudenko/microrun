@@ -401,6 +401,7 @@ export class Orchestrator {
     const activated = 'activate' in op.stepsDone;
     const plan = (op.stepsDone.plan as { reactivate: boolean } | undefined) ?? { reactivate: rel.state === 'available' };
     if (!('plan' in op.stepsDone)) await this.repo.markStepDone(op.id, 'plan', plan);
+    if (plan.reactivate && rel.stored) await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));
 
     const pulled = await step('pull', async () =>
       this.call(env, op.id, 'pull', { type: 'pullImages', refs: [...new Set(Object.values(rel.images).map((i) => i.ref))] }),
@@ -486,6 +487,13 @@ export class Orchestrator {
     return true;
   }
 
+  private fetchCmd(env: EnvRow, r: ReleaseRow): CommandOf<'fetchImages'> {
+    return {
+      type: 'fetchImages', storage: this.d.decryptStorage(env), env: env.name, sha: r.commitSha, images: refs(r.images),
+      digests: Object.fromEntries(Object.entries(r.images).filter(([, i]) => i.digest).map(([s, i]) => [s, i.digest])),
+    };
+  }
+
   private async storeRelease(op: OperationRow, env: EnvRow, rel: ReleaseRow, images: Images): Promise<{ stored: boolean }> {
     try {
       await this.call(env, op.id, 'store', {
@@ -517,12 +525,7 @@ export class Orchestrator {
     const { step, once } = this.stepper(op);
     const target = (await this.repo.getRelease(op.toReleaseId!))!;
     await step('markers', async () => this.checkMarkers(op, env));
-    await step('fetch', async () =>
-      this.call(env, op.id, 'fetch', {
-        type: 'fetchImages', storage: this.d.decryptStorage(env), env: env.name, sha: target.commitSha, images: refs(target.images),
-        digests: Object.fromEntries(Object.entries(target.images).filter(([, i]) => i.digest).map(([s, i]) => [s, i.digest])),
-      }),
-    );
+    await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, target)));
     const { services, proxyMode } = await this.services(env, target.images);
     await step('switch', async () =>
       this.call(env, op.id, 'switch', {
@@ -608,6 +611,7 @@ export class Orchestrator {
     const { step } = this.stepper(op);
     const rel = (await this.repo.getRelease(op.toReleaseId!))!;
     try {
+      if (rel.stored) await step('fetch', async () => this.call(env, op.id, 'fetch', this.fetchCmd(env, rel)));
       await step('contract', async () => {
         const out = await this.call(env, op.id, 'contract', {
           type: 'runCommand', compose: compose(env), service: env.migrationService, image: imageOf(rel.images[env.migrationService]!),
