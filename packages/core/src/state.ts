@@ -10,6 +10,7 @@ export interface ReleaseFacts {
   activationSeq: number | null;
   blockedAt: number | null;
   imagePurgedAt: number | null;
+  imageUnpinnedAt: number | null;
   contractedAt: number | null;
   cleanupState: CleanupState;
   hasCleanupCmd: boolean;
@@ -46,7 +47,7 @@ function nextSeq(rs: ReleaseFacts[]): number {
 }
 
 function activate(rs: ReleaseFacts[], releaseId: string): ReleasePatch {
-  return { id: releaseId, patch: { state: 'active', activationSeq: nextSeq(rs), supersededAt: null } };
+  return { id: releaseId, patch: { state: 'active', activationSeq: nextSeq(rs), supersededAt: null, imageUnpinnedAt: null } };
 }
 
 export function onDeploySuccess(rs: ReleaseFacts[], releaseId: string, now: number): ReleasePatch[] {
@@ -101,6 +102,36 @@ export function dueExpiry(
     )
     .map((r) => r.id);
   return { expire, purge };
+}
+
+export type UnpinFacts = ReleaseFacts & { stored: boolean; images: Record<string, { ref: string }> };
+
+const newerSuperseded = (a: ReleaseFacts, b: ReleaseFacts) =>
+  (b.supersededAt ?? 0) - (a.supersededAt ?? 0) || b.deployedAt - a.deployedAt;
+
+export function dueUnpin(rs: UnpinFacts[]): string[] {
+  const previous = rs.filter((r) => r.state === 'available').sort(newerSuperseded)[0]?.id;
+  return rs
+    .filter(
+      (r) =>
+        r.id !== previous &&
+        r.stored &&
+        r.imagePurgedAt === null &&
+        r.imageUnpinnedAt === null &&
+        (r.state === 'available' || (r.state === 'blocked' && r.cleanupState !== 'pending')),
+    )
+    .sort((a, b) => -newerSuperseded(a, b))
+    .map((r) => r.id);
+}
+
+export function unpinKeep(rs: UnpinFacts[], due: string[], id: string): string[] {
+  const own = new Set(Object.values(rs.find((r) => r.id === id)?.images ?? {}).map((i) => i.ref));
+  const held = new Set(
+    rs
+      .filter((r) => !due.includes(r.id) && r.imagePurgedAt === null && r.imageUnpinnedAt === null)
+      .flatMap((r) => Object.values(r.images).map((i) => i.ref)),
+  );
+  return [...own].filter((ref) => held.has(ref)).sort();
 }
 
 export function nextContract(rs: ReleaseFacts[]): string | null {
