@@ -43,7 +43,8 @@ export type Command =
   | { type: 'switchServices'; compose: ComposeRef; services: ServiceSpec[]; healthTimeoutS: number; proxyMode: 'external'|'bundled' }
   | { type: 'storeImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> }
   | { type: 'fetchImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string>; digests?: Record<string,string> }
-  | { type: 'deleteImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> };
+  | { type: 'deleteImages'; storage: StorageConfig; env: string; sha: string; images: Record<string,string> }
+  | { type: 'unpinImages'; env: string; sha: string; images: Record<string,string>; keep: string[] };
 
 export interface ResultMap {
   ping: { agentVersion: string };
@@ -55,7 +56,7 @@ export interface ResultMap {
   dryRunExpand: { snapshot: SchemaSnapshot; log: string };
   runCommand: { exitCode: number; stdout: string; log: string };
   switchServices: { replaced: string[] };
-  storeImages: {}; fetchImages: {}; deleteImages: {};
+  storeImages: {}; fetchImages: {}; deleteImages: {}; unpinImages: { unpinned: boolean };
 }
 
 export type CommandOf<T extends Command['type']> = Extract<Command, { type: T }>;
@@ -111,6 +112,7 @@ export const commandSchema: z.ZodType<Command> = z.discriminatedUnion('type', [
   z.object({ type: z.literal('storeImages'), ...imagesCommand }),
   z.object({ type: z.literal('fetchImages'), ...imagesCommand, digests: stringMap.optional() }),
   z.object({ type: z.literal('deleteImages'), ...imagesCommand }),
+  z.object({ type: z.literal('unpinImages'), env: z.string(), sha: z.string(), images: stringMap, keep: z.array(z.string()) }),
 ]);
 
 const opKey = z.object({ opId: z.string(), step: z.string() });
