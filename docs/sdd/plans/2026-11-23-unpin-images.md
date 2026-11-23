@@ -46,7 +46,7 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
 **Executor:** claude
 **Covers:** spec §6.2 (`dueUnpin` cases, `keep`), §6.3 (`imageUnpinnedAt: null` on activate), §6.4 (agent Docker unpin), §6.5 (fetch after unpin on a pulled image), §6.6 (scheduler), §6.6а (orchestrator fetch steps), §6.7 (column), §6.8 (end-state file list).
 
-- [ ] **Step 1: write the acceptance tests**
+- [x] **Step 1: write the acceptance tests**
 
   **1a. `packages/core/src/state.test.ts`.** Add `dueUnpin, unpinKeep` to the import from `./state.ts`, add `imageUnpinnedAt: null,` to the `mk()` literal right after `imagePurgedAt: null,` (`state.test.ts:24`), and append:
   ```ts
@@ -328,8 +328,8 @@ Serialized: Task 4 and Task 5 wait for Task 2 (the `unpinImages` command/result 
   ```
   - The new-release step lists at :243 and :277 stay unchanged (no `fetch` for a new release).
 
-- [ ] **Step 2: run them, watch them fail** — `pnpm test`, expect failures in `state.test.ts` (`dueUnpin is not a function`), `protocol.test.ts` (`accepts unpinImages`), `runtime.test.ts`, `repo.test.ts` (`no such column` / `undefined`), `scheduler.test.ts`, `orchestrator.test.ts` (steps mismatch); then `pnpm test:docker`, expect `unpinImages is not a function` in `storage.docker.test.ts`. The behaviour is missing.
-- [ ] **Step 3: end-state check (passes on arrival, run again last)** —
+- [x] **Step 2: run them, watch them fail** — `pnpm test`, expect failures in `state.test.ts` (`dueUnpin is not a function`), `protocol.test.ts` (`accepts unpinImages`), `runtime.test.ts`, `repo.test.ts` (`no such column` / `undefined`), `scheduler.test.ts`, `orchestrator.test.ts` (steps mismatch); then `pnpm test:docker`, expect `unpinImages is not a function` in `storage.docker.test.ts`. The behaviour is missing.
+- [x] **Step 3: end-state check (passes on arrival, run again last)** —
   `git diff --name-only main...HEAD | grep -vxF -f <(printf '%s\n' docs/sdd/specs/2026-11-23-unpin-images.md docs/sdd/plans/2026-11-23-unpin-images.md packages/core/src/state.ts packages/core/src/state.test.ts packages/core/src/protocol.ts packages/core/src/protocol.test.ts packages/agent/src/storage.ts packages/agent/src/handler.ts packages/agent/src/runtime.test.ts packages/agent/src/storage.docker.test.ts packages/server/src/db/migrations/005_image_unpinned_at.ts packages/server/src/db/db.ts packages/server/src/db/repo.test.ts packages/server/src/scheduler.ts packages/server/src/scheduler.test.ts packages/server/src/orchestrator.ts packages/server/src/orchestrator.test.ts)`, expect no output (grep exit 1).
 
 ---
