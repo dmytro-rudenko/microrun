@@ -481,3 +481,74 @@ describe('Scheduler tickEnv edges', () => {
     expect(agent.of('storeImages')).toEqual([]);
   });
 });
+
+describe('Scheduler unpin', () => {
+  async function seed() {
+    const env = await mkEnv('staging');
+    const d = await mkRelease(env.id, 'ddd', 'active', 4000);
+    const c = await mkRelease(env.id, 'ccc', 'available', 3000, { supersededAt: T0 - 1000 });
+    const b = await mkRelease(env.id, 'bbb', 'available', 2000, { supersededAt: T0 - 2000 });
+    const a = await mkRelease(env.id, 'aaa', 'available', 1000, { supersededAt: T0 - 3000 });
+    return { env, a, b, c, d };
+  }
+
+  it('unpins stored releases except the active and previous one, once', async () => {
+    const { a, b, c, d } = await seed();
+    agent.handlers.unpinImages = () => ({ unpinned: true });
+    await scheduler.tick();
+    expect(agent.of('unpinImages')).toEqual([
+      { type: 'unpinImages', env: 'staging', sha: 'aaa', images: { web: 'app:aaa' }, keep: [] },
+      { type: 'unpinImages', env: 'staging', sha: 'bbb', images: { web: 'app:bbb' }, keep: [] },
+    ]);
+    expect((await release(a.id)).imageUnpinnedAt).toBe(T0);
+    expect((await release(b.id)).imageUnpinnedAt).toBe(T0);
+    expect((await release(c.id)).imageUnpinnedAt).toBeNull();
+    expect((await release(d.id)).imageUnpinnedAt).toBeNull();
+
+    now = T0 + 60_000;
+    await scheduler.tick();
+    expect(agent.of('unpinImages')).toHaveLength(2);
+  });
+
+  it('retries an in-use release with a fresh opId on the next tick', async () => {
+    const { a } = await seed();
+    agent.handlers.unpinImages = () => ({ unpinned: false });
+    await scheduler.tick();
+    now = T0 + 60_000;
+    await scheduler.tick();
+    const keys = agent.calls.filter((c) => c.cmd.type === 'unpinImages' && c.cmd.sha === 'aaa').map((c) => c.key.opId);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+    expect((await release(a.id)).imageUnpinnedAt).toBeNull();
+  });
+
+  it('leaves the marker unset when the agent fails', async () => {
+    const { a } = await seed();
+    agent.handlers.unpinImages = () => { throw new AgentError('STORAGE_FAILED', { kind: 'unpin' }); };
+    await scheduler.tick();
+    now = T0 + 60_000;
+    await scheduler.tick();
+    expect(agent.of('unpinImages').filter((c) => c.sha === 'aaa')).toHaveLength(2);
+    expect((await release(a.id)).imageUnpinnedAt).toBeNull();
+  });
+
+  it('does not call an offline agent', async () => {
+    await seed();
+    agent.online.delete(serverId);
+    await scheduler.tick();
+    expect(agent.of('unpinImages')).toEqual([]);
+  });
+
+  it('passes a ref shared with the active release in keep', async () => {
+    const env = await mkEnv('staging');
+    const shared = { web: { ref: 'app:shared', digest: 'sha256:shared' } };
+    await mkRelease(env.id, 'ddd', 'active', 4000, { images: shared });
+    await mkRelease(env.id, 'ccc', 'available', 3000, { supersededAt: T0 - 1000 });
+    await mkRelease(env.id, 'aaa', 'available', 1000, { supersededAt: T0 - 3000, images: shared });
+    agent.handlers.unpinImages = () => ({ unpinned: true });
+    await scheduler.tick();
+    expect(agent.of('unpinImages')).toEqual([
+      { type: 'unpinImages', env: 'staging', sha: 'aaa', images: { web: 'app:shared' }, keep: ['app:shared'] },
+    ]);
+  });
+});

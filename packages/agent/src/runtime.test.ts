@@ -167,6 +167,23 @@ describe('createHandler command mapping', () => {
     expect(events).toEqual(['pin:prod:abc1234:registry/api:1', 'store:prod:abc1234']);
   });
 
+  it('unpinImages passes env, sha, images and keep and returns the layer result', async () => {
+    const seen: unknown[] = [];
+    const handler = createHandler({
+      stateDir: tmp(),
+      docker: fakeDocker().run,
+      layers: {
+        unpinImages: async (env: string, sha: string, images: Record<string, string>, keep: string[]) => {
+          seen.push([env, sha, images, keep]);
+          return { unpinned: true };
+        },
+      },
+    });
+    await expect(handler(key('unpin'), { type: 'unpinImages', env: 'prod', sha: 'abc1234', images: { api: 'registry/api:1' }, keep: ['registry/api:1'] }))
+      .resolves.toEqual({ unpinned: true });
+    expect(seen).toEqual([['prod', 'abc1234', { api: 'registry/api:1' }, ['registry/api:1']]]);
+  });
+
   it('storeImages keeps the pin when the store fails and rethrows the store error', async () => {
     const events: string[] = [];
     const handler = createHandler({

@@ -286,9 +286,24 @@ describe('Orchestrator deploy', () => {
     await deploy(B);
     const op = await deploy(A);
     expect(op.status).toBe('succeeded');
-    expect(agent.steps(op.id)).toEqual(['pull', 'markers', 'switch', 'store']);
-    expect(await rel(A)).toMatchObject({ state: 'active', activationSeq: 3, schemaSnapshot: SCHEMAS[A] });
+    expect(agent.steps(op.id)).toEqual(['fetch', 'pull', 'markers', 'switch', 'store']);
+    const ra = (await rel(A))!;
+    expect(agent.cmds(op.id, 'fetchImages')[0]).toEqual({
+      type: 'fetchImages', storage: STORAGE, env: 'prod', sha: A,
+      images: Object.fromEntries(Object.entries(ra.images).map(([s, i]) => [s, i.ref])),
+      digests: Object.fromEntries(Object.entries(ra.images).filter(([, i]) => i.digest).map(([s, i]) => [s, i.digest])),
+    });
+    expect(ra).toMatchObject({ state: 'active', activationSeq: 3, schemaSnapshot: SCHEMAS[A] });
     expect(await rel(B)).toMatchObject({ state: 'available' });
+  });
+
+  it('reactivates an unstored available commit without a fetch step', async () => {
+    await deploy(A);
+    await deploy(B);
+    await repo.patchReleases([{ id: (await rel(A))!.id, patch: { stored: false } }]);
+    const op = await deploy(A);
+    expect(op.status).toBe('succeeded');
+    expect(agent.steps(op.id)).toEqual(['pull', 'markers', 'switch', 'store']);
   });
 
   it('expands a single "*" image to every service', async () => {
@@ -726,6 +741,17 @@ describe('Orchestrator contract retry', () => {
     const op = await settle(res.operationId);
     expect(op).toMatchObject({ kind: 'contract', status: 'failed', code: 'CONTRACT_FAILED' });
     expect(await rel(A)).toMatchObject({ contractedAt: null });
+  });
+
+  it('fetches the stored release image before running contract_cmd', async () => {
+    await failedContract();
+    now += 1000;
+    const res = await orch.retryContract(envId);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    const op = await settle(res.operationId);
+    expect(op).toMatchObject({ kind: 'contract', status: 'succeeded' });
+    expect(agent.steps(op.id)).toEqual(['fetch', 'contract']);
+    expect(agent.cmds(op.id, 'fetchImages')[0]).toMatchObject({ storage: STORAGE, env: 'prod', sha: A });
   });
 
   it('runs contract_cmd from the release image and stamps contracted_at on success', async () => {

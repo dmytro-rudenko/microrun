@@ -2,12 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   decideDeploy,
   dueExpiry,
+  dueUnpin,
   lapseCleanup,
   nextContract,
   onDeploySuccess,
   onDestructiveApproved,
   onRollbackSuccess,
   planRollback,
+  unpinKeep,
   windowLeftMs,
 } from './state.ts';
 import type { ReleaseFacts, ReleasePatch, ReleaseState } from './state.ts';
@@ -22,6 +24,7 @@ function mk(id: string, state: ReleaseState, extra: Partial<ReleaseFacts> = {}):
     activationSeq: null,
     blockedAt: null,
     imagePurgedAt: null,
+    imageUnpinnedAt: null,
     contractedAt: null,
     cleanupState: 'none',
     hasCleanupCmd: false,
@@ -236,5 +239,91 @@ describe('windowLeftMs', () => {
     expect(windowLeftMs(mk('A', 'active'), retentionMs, 1200)).toBeNull();
     expect(windowLeftMs(mk('B', 'blocked', { blockedAt: 1000 }), retentionMs, 1200)).toBeNull();
     expect(windowLeftMs(mk('E', 'expired', { supersededAt: 1000 }), retentionMs, 1200)).toBeNull();
+  });
+});
+
+type U = ReleaseFacts & { stored: boolean; images: Record<string, { ref: string }> };
+const u = (id: string, state: ReleaseState, extra: Partial<U> = {}): U =>
+  ({ ...mk(id, state), stored: true, images: { web: { ref: `app:${id}` } }, ...extra });
+
+describe('dueUnpin', () => {
+  it('keeps the active and the most recently superseded release, oldest first', () => {
+    const rs = [
+      u('R4', 'active'),
+      u('R3', 'available', { supersededAt: 300 }),
+      u('R2', 'available', { supersededAt: 200 }),
+      u('R1', 'available', { supersededAt: 100 }),
+    ];
+    expect(dueUnpin(rs)).toEqual(['R1', 'R2']);
+  });
+
+  it('breaks a supersededAt tie by the larger deployedAt', () => {
+    const rs = [
+      u('A', 'active'),
+      u('P', 'available', { supersededAt: 100, deployedAt: 20 }),
+      u('Q', 'available', { supersededAt: 100, deployedAt: 10 }),
+    ];
+    expect(dueUnpin(rs)).toEqual(['Q']);
+  });
+
+  it('skips unstored, purged, already unpinned, failed, expired and pending-cleanup blocked releases', () => {
+    const rs = [
+      u('A', 'active'),
+      u('PREV', 'available', { supersededAt: 999 }),
+      u('S', 'available', { supersededAt: 1, stored: false }),
+      u('PU', 'available', { supersededAt: 2, imagePurgedAt: 5 }),
+      u('UN', 'available', { supersededAt: 3, imageUnpinnedAt: 5 }),
+      u('F', 'failed'),
+      u('E', 'expired', { supersededAt: 4 }),
+      u('BP', 'blocked', { blockedAt: 1, cleanupState: 'pending' }),
+    ];
+    expect(dueUnpin(rs)).toEqual([]);
+  });
+
+  it.each(['none', 'applied', 'dismissed', 'lapsed'] as const)('unpins a stored blocked release with cleanupState %s', (cs) => {
+    const rs = [u('A', 'active'), u('PREV', 'available', { supersededAt: 999 }), u('B', 'blocked', { blockedAt: 1, cleanupState: cs })];
+    expect(dueUnpin(rs)).toEqual(['B']);
+  });
+});
+
+describe('unpinKeep', () => {
+  it('keeps a ref shared with a retained release and drops one shared only with another unpinned release', () => {
+    const rs = [
+      u('A', 'active', { images: { web: { ref: 'app:shared' } } }),
+      u('P', 'available', { supersededAt: 300, images: { web: { ref: 'app:p' } } }),
+      u('Y', 'available', { supersededAt: 200, images: { web: { ref: 'app:x' } } }),
+      u('X', 'available', { supersededAt: 100, images: { web: { ref: 'app:shared' }, worker: { ref: 'app:x' } } }),
+    ];
+    const due = dueUnpin(rs);
+    expect(due).toEqual(['X', 'Y']);
+    expect(unpinKeep(rs, due, 'X')).toEqual(['app:shared']);
+    expect(unpinKeep(rs, due, 'Y')).toEqual([]);
+  });
+
+  it('keeps a ref shared with the previous release but not one held only by a purged or unpinned release', () => {
+    const rs = [
+      u('A', 'active', { images: { web: { ref: 'app:a' } } }),
+      u('P', 'available', { supersededAt: 300, images: { web: { ref: 'app:prev' } } }),
+      u('G', 'expired', { supersededAt: 50, imagePurgedAt: 60, images: { web: { ref: 'app:gone' } } }),
+      u('N', 'available', { supersededAt: 150, imageUnpinnedAt: 160, images: { web: { ref: 'app:gone' } } }),
+      u('X', 'available', { supersededAt: 100, images: { web: { ref: 'app:prev' }, worker: { ref: 'app:gone' } } }),
+    ];
+    const due = dueUnpin(rs);
+    expect(due).toEqual(['X']);
+    expect(unpinKeep(rs, due, 'X')).toEqual(['app:prev']);
+  });
+});
+
+describe('activation resets imageUnpinnedAt', () => {
+  it('on deploy success (reactivation)', () => {
+    const rs = [mk('R1', 'available', { activationSeq: 1, supersededAt: 100, imageUnpinnedAt: 150 }), mk('R2', 'active', { activationSeq: 2 })];
+    const target = onDeploySuccess(rs, 'R1', 5000).find((p) => p.id === 'R1')!;
+    expect(target.patch).toMatchObject({ state: 'active', imageUnpinnedAt: null });
+  });
+
+  it('on rollback success', () => {
+    const rs = [mk('R1', 'available', { activationSeq: 1, supersededAt: 100, imageUnpinnedAt: 150 }), mk('R2', 'active', { activationSeq: 2 })];
+    const target = onRollbackSuccess(rs, 'R1', 5000).find((p) => p.id === 'R1')!;
+    expect(target.patch).toMatchObject({ state: 'active', imageUnpinnedAt: null });
   });
 });
