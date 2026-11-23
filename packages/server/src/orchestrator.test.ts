@@ -286,9 +286,34 @@ describe('Orchestrator deploy', () => {
     await deploy(B);
     const op = await deploy(A);
     expect(op.status).toBe('succeeded');
-    expect(agent.steps(op.id)).toEqual(['pull', 'markers', 'switch', 'store']);
-    expect(await rel(A)).toMatchObject({ state: 'active', activationSeq: 3, schemaSnapshot: SCHEMAS[A] });
+    expect(agent.steps(op.id)).toEqual(['fetch', 'pull', 'markers', 'switch', 'store']);
+    const ra = (await rel(A))!;
+    expect(agent.cmds(op.id, 'fetchImages')[0]).toEqual({
+      type: 'fetchImages', storage: STORAGE, env: 'prod', sha: A,
+      images: Object.fromEntries(Object.entries(ra.images).map(([s, i]) => [s, i.ref])),
+      digests: Object.fromEntries(Object.entries(ra.images).filter(([, i]) => i.digest).map(([s, i]) => [s, i.digest])),
+    });
+    expect(ra).toMatchObject({ state: 'active', activationSeq: 3, schemaSnapshot: SCHEMAS[A] });
     expect(await rel(B)).toMatchObject({ state: 'available' });
+  });
+
+  it('fails a reactivation with STORAGE_FAILED when the fetch fails, without pulling or switching', async () => {
+    await deploy(A);
+    await deploy(B);
+    agent.handlers.fetchImages = () => { throw new AgentError('STORAGE_FAILED', { kind: 'local' }); };
+    const op = await deploy(A);
+    expect(op).toMatchObject({ status: 'failed', code: 'STORAGE_FAILED' });
+    expect(agent.cmds(op.id, 'pullImages')).toEqual([]);
+    expect(agent.cmds(op.id, 'switchServices')).toEqual([]);
+  });
+
+  it('reactivates an unstored available commit without a fetch step', async () => {
+    await deploy(A);
+    await deploy(B);
+    await repo.patchReleases([{ id: (await rel(A))!.id, patch: { stored: false } }]);
+    const op = await deploy(A);
+    expect(op.status).toBe('succeeded');
+    expect(agent.steps(op.id)).toEqual(['pull', 'markers', 'switch', 'store']);
   });
 
   it('expands a single "*" image to every service', async () => {
@@ -632,6 +657,45 @@ describe('Orchestrator cleanup', () => {
     expect(relB.cleanupState).toBe('pending');
   });
 
+  it('fetches a stored blocked release before its cleanup preview and apply and clears imageUnpinnedAt', async () => {
+    await deploy(A);
+    await deploy(B);
+    await deploy(C);
+    await rollback(A);
+    const relC = (await rel(C))!;
+    expect(relC.stored).toBe(true);
+
+    await repo.patchReleases([{ id: relC.id, patch: { imageUnpinnedAt: now } }]);
+    now += 1000;
+    const preview = await cleanupOp(await orch.requestCleanupPreview(relC.id));
+    expect(preview).toMatchObject({ status: 'succeeded' });
+    expect(agent.steps(preview.id)[0]).toBe('fetch');
+    expect(agent.cmds(preview.id, 'fetchImages')[0]).toMatchObject({ storage: STORAGE, env: 'prod', sha: C });
+    expect((await rel(C))!.imageUnpinnedAt).toBeNull();
+
+    await repo.patchReleases([{ id: relC.id, patch: { imageUnpinnedAt: now } }]);
+    now += 1000;
+    const apply = await cleanupOp(await orch.requestCleanupApply(relC.id, ['orphans', 'tags']));
+    expect(apply).toMatchObject({ status: 'succeeded' });
+    expect(agent.steps(apply.id)[0]).toBe('fetch');
+    expect(agent.cmds(apply.id, 'fetchImages')[0]).toMatchObject({ storage: STORAGE, env: 'prod', sha: C });
+    expect((await rel(C))!.imageUnpinnedAt).toBeNull();
+  });
+
+  it('runs the cleanup of an unstored blocked release without a fetch step', async () => {
+    await deploy(A);
+    await deploy(B);
+    await deploy(C);
+    await rollback(A);
+    const relC = (await rel(C))!;
+    await repo.patchReleases([{ id: relC.id, patch: { stored: false } }]);
+    now += 1000;
+    const preview = await cleanupOp(await orch.requestCleanupPreview(relC.id));
+    expect(preview).toMatchObject({ status: 'succeeded' });
+    expect(agent.cmds(preview.id, 'fetchImages')).toEqual([]);
+    expect(agent.steps(preview.id)).toEqual(['preview']);
+  });
+
   it('applies a cleanup whose deleted counts match the preview without a code', async () => {
     await deploy(A);
     await deploy(B);
@@ -726,6 +790,42 @@ describe('Orchestrator contract retry', () => {
     const op = await settle(res.operationId);
     expect(op).toMatchObject({ kind: 'contract', status: 'failed', code: 'CONTRACT_FAILED' });
     expect(await rel(A)).toMatchObject({ contractedAt: null });
+  });
+
+  it('fetches the stored release image before running contract_cmd', async () => {
+    await failedContract();
+    now += 1000;
+    const res = await orch.retryContract(envId);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    const op = await settle(res.operationId);
+    expect(op).toMatchObject({ kind: 'contract', status: 'succeeded' });
+    expect(agent.steps(op.id)).toEqual(['fetch', 'contract']);
+    expect(agent.cmds(op.id, 'fetchImages')[0]).toMatchObject({ storage: STORAGE, env: 'prod', sha: A });
+  });
+
+  it('clears imageUnpinnedAt of the release once its images are fetched for a contract', async () => {
+    const relA = await failedContract();
+    await repo.patchReleases([{ id: relA.id, patch: { imageUnpinnedAt: now } }]);
+    now += 1000;
+    const res = await orch.retryContract(envId);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    const op = await settle(res.operationId);
+    expect(op).toMatchObject({ kind: 'contract', status: 'succeeded' });
+    expect(agent.steps(op.id)[0]).toBe('fetch');
+    expect((await rel(A))!.imageUnpinnedAt).toBeNull();
+  });
+
+  it('fails a contract with CONTRACT_FAILED and a STORAGE_FAILED log line when the fetch fails', async () => {
+    await failedContract();
+    agent.handlers.fetchImages = () => { throw new AgentError('STORAGE_FAILED', { kind: 'local' }); };
+    now += 1000;
+    const res = await orch.retryContract(envId);
+    if (!('operationId' in res)) throw new Error(res.rejected.code);
+    const op = await settle(res.operationId);
+    expect(op).toMatchObject({ kind: 'contract', status: 'failed', code: 'CONTRACT_FAILED' });
+    expect(agent.cmds(op.id, 'runCommand')).toEqual([]);
+    expect(await rel(A)).toMatchObject({ contractedAt: null });
+    expect(op.log).toContain('STORAGE_FAILED');
   });
 
   it('runs contract_cmd from the release image and stamps contracted_at on success', async () => {

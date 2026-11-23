@@ -50,6 +50,7 @@ const commands: Command[] = [
   { type: 'fetchImages', storage: registry, env: 'staging', sha: 'abc1234', images },
   { type: 'fetchImages', storage: local, env: 'staging', sha: 'abc1234', images, digests: { web: 'sha256:aa', worker: 'sha256:bb' } },
   { type: 'deleteImages', storage: s3, env: 'staging', sha: 'abc1234', images },
+  { type: 'unpinImages', env: 'staging', sha: 'abc1234', images, keep: ['ghcr.io/acme/shop-web:abc1234'] },
 ];
 
 describe('constants', () => {

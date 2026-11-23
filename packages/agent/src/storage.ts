@@ -197,11 +197,23 @@ export function deleteImages(s: StorageConfig, env: string, sha: string, images:
         client.destroy();
       }
     }
-    for (const [svc, ref] of Object.entries(images)) {
-      for (const target of [pinRef(env, sha, svc), ref]) {
-        const r = await docker(['rmi', target]);
-        if (r.code !== 0 && !/no such image|being used|is using/i.test(r.stderr)) throw new Error(r.stderr);
-      }
-    }
+    await removeLocal(env, sha, images);
   });
+}
+
+async function removeLocal(env: string, sha: string, images: Record<string, string>, keep: string[] = []): Promise<boolean> {
+  let removed = true;
+  for (const [svc, ref] of Object.entries(images)) {
+    for (const target of keep.includes(ref) ? [pinRef(env, sha, svc)] : [pinRef(env, sha, svc), ref]) {
+      const r = await docker(['rmi', target]);
+      if (r.code === 0 || /no such image/i.test(r.stderr)) continue;
+      if (/being used|is using/i.test(r.stderr)) removed = false;
+      else throw new Error(r.stderr);
+    }
+  }
+  return removed;
+}
+
+export function unpinImages(env: string, sha: string, images: Record<string, string>, keep: string[]): Promise<{ unpinned: boolean }> {
+  return guarded('unpin', async () => ({ unpinned: await removeLocal(env, sha, images, keep) }));
 }

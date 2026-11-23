@@ -1,4 +1,4 @@
-import { dueExpiry, lapseCleanup, nextContract } from '@microrun/core/state';
+import { dueExpiry, dueUnpin, lapseCleanup, nextContract, unpinKeep } from '@microrun/core/state';
 import { AgentError } from '@microrun/core/protocol';
 import type { AgentPort, StorageConfig } from '@microrun/core/protocol';
 import { BusyError, composeRefOf } from './db/repo.ts';
@@ -105,6 +105,28 @@ export class Scheduler {
     }
   }
 
+  private async unpin(env: EnvRow, now: number): Promise<void> {
+    const rs = await this.d.repo.listReleases(env.id);
+    const due = dueUnpin(rs);
+    for (const id of due) {
+      const r = rs.find((x) => x.id === id)!;
+      if ((await this.d.repo.activeOperations()).some((o) => o.envId === env.id)) return;
+      try {
+        const { unpinned } = await this.d.agent.call<'unpinImages'>(env.serverId, { opId: `unpin:${r.id}:${now}`, step: 'unpinImages' }, {
+          type: 'unpinImages',
+          env: env.name,
+          sha: r.commitSha,
+          images: Object.fromEntries(Object.entries(r.images).map(([svc, i]) => [svc, i.ref])),
+          keep: unpinKeep(rs, due, r.id),
+        });
+        if (unpinned) await this.d.repo.patchReleases([{ id: r.id, patch: { imageUnpinnedAt: now } }]);
+        else this.log(`scheduler: env ${env.name}: unpin ${r.commitSha}: in use`);
+      } catch (e) {
+        this.log(`scheduler: env ${env.name}: unpin ${r.commitSha}: ${message(e)}`);
+      }
+    }
+  }
+
   private async tickEnv(env: EnvRow, now: number): Promise<void> {
     const { repo } = this.d;
     const online = this.d.agent.isOnline(env.serverId);
@@ -132,6 +154,7 @@ export class Scheduler {
     if (lapsed.length) await repo.patchReleases(lapsed.map((id) => ({ id, patch: { cleanupState: 'lapsed' as const } })));
 
     if (online) await this.store(env);
+    if (online) await this.unpin(env, now);
   }
 
   private async contract(env: EnvRow): Promise<void> {

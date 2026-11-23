@@ -267,3 +267,14 @@ describe('Repo', () => {
     expect(await repo.countEnvsOnServer(s.id)).toBe(2);
   });
 });
+
+describe('image_unpinned_at', () => {
+  it('stores image_unpinned_at, null by default', async () => {
+    const server = await mkServer();
+    const env = await mkEnv(server.id, 'prod', 'main');
+    const r = await repo.insertRelease(newRelease(env.id, 'aaa', 'available'));
+    expect((await repo.getRelease(r.id))!.imageUnpinnedAt).toBeNull();
+    await repo.patchReleases([{ id: r.id, patch: { imageUnpinnedAt: 42 } }]);
+    expect((await repo.getRelease(r.id))!.imageUnpinnedAt).toBe(42);
+  });
+});

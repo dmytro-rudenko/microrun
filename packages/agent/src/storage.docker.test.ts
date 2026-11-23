@@ -6,7 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { CreateBucketCommand, HeadObjectCommand, ListBucketsCommand, S3Client } from '@aws-sdk/client-s3';
 import { AgentError, type StorageConfig } from '@microrun/core/protocol';
-import { deleteImages, fetchImages, imagesPresent, pinImages, storeImages } from './storage.ts';
+import { deleteImages, fetchImages, imagesPresent, pinImages, storeImages, unpinImages } from './storage.ts';
 
 const id = randomBytes(3).toString('hex');
 const env = `st-${id}`;
@@ -78,6 +78,8 @@ async function expectLabels(images: Record<string, string>, labels: Record<strin
 async function expectAbsent(images: Record<string, string>): Promise<void> {
   for (const ref of Object.values(images)) expect(await labelOf(ref)).toBeNull();
 }
+
+const pinOf = (sha: string, svc: string) => `microrun-pin/${env}:${sha.slice(0, 12)}-${svc}`;
 
 async function hostPort(container: string, port: number): Promise<string> {
   const out = (await dk(['port', container, `${port}/tcp`])).trim().split('\n')[0];
@@ -396,5 +398,74 @@ describe('environment names that are not valid image refs', () => {
       .then((h) => h.ContentLength ?? 0, () => -1);
     client.destroy();
     expect(head).toBeGreaterThan(0);
+  });
+});
+
+describe('unpinning', () => {
+  let cfg: StorageConfig;
+  beforeAll(() => {
+    cfg = { kind: 'local', path: join(workDir, 'unpin') };
+  });
+
+  it('removes the pin and release tags, is idempotent, and fetch brings the images back', async () => {
+    const set = await buildSet('unpin');
+    const sha = newSha();
+    await pinImages(env, sha, set.images);
+    await storeImages(cfg, env, sha, set.images);
+
+    await expect(unpinImages(env, sha, set.images, [])).resolves.toEqual({ unpinned: true });
+    await expectAbsent(set.images);
+    for (const svc of Object.keys(set.images)) expect(await labelOf(pinOf(sha, svc))).toBeNull();
+    await expect(unpinImages(env, sha, set.images, [])).resolves.toEqual({ unpinned: true });
+
+    await fetchImages(cfg, env, sha, set.images);
+    await expectLabels(set.images, set.labels);
+  });
+
+  it('leaves a ref listed in keep but still removes that service pin', async () => {
+    const set = await buildSet('unpinkeep');
+    const sha = newSha();
+    await pinImages(env, sha, set.images);
+    await expect(unpinImages(env, sha, set.images, [set.images.web!])).resolves.toEqual({ unpinned: true });
+    expect(await labelOf(set.images.web!)).toBe(set.labels.web);
+    expect(await labelOf(set.images.worker!)).toBeNull();
+    expect(await labelOf(pinOf(sha, 'web'))).toBeNull();
+  });
+
+  it('reports unpinned: false while a container uses the image and keeps it', async () => {
+    const set = await buildSet('unpinbusy');
+    const sha = newSha();
+    const name = `mrst-${id}-busy`;
+    await pinImages(env, sha, set.images);
+    await dk(['run', '-d', '--name', name, set.images.web!, 'sleep', '300']);
+    try {
+      await expect(unpinImages(env, sha, set.images, [])).resolves.toEqual({ unpinned: false });
+      expect(await labelOf(set.images.web!)).toBe(set.labels.web);
+    } finally {
+      await dk(['rm', '-f', name]);
+    }
+  });
+
+  it('fetches an unpinned release whose digest was recorded from a real pull', async () => {
+    const built = await buildSet('unpinpull');
+    const ref = `${registryHost}/mrst/pulled:${id}`;
+    await dk(['tag', built.images.web!, ref]);
+    await dk(['push', ref]);
+    await purge({ ...built.images, pushed: ref });
+    await dk(['pull', ref]);
+    const line = (await dk(['image', 'inspect', '--format', '{{json .RepoDigests}} {{.Id}}', ref])).trim();
+    const cut = line.lastIndexOf(' ');
+    const repoDigests = JSON.parse(line.slice(0, cut)) as string[] | null;
+    const digest = repoDigests?.[0] ?? line.slice(cut + 1);
+    const images = { web: ref };
+    const sha = newSha();
+
+    await pinImages(env, sha, images);
+    await storeImages(cfg, env, sha, images);
+    await expect(unpinImages(env, sha, images, [])).resolves.toEqual({ unpinned: true });
+    await expectAbsent(images);
+
+    await fetchImages(cfg, env, sha, images, { web: digest });
+    expect(await labelOf(ref)).toBe(built.labels.web);
   });
 });

@@ -627,7 +627,8 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
     const rolling = await rollingCheck(d, parsed.value);
     if (rolling.errors) return rejected(rolling.errors);
     const { storageConfig, ...rest } = parsed.value;
-    const storage = keepSecrets(storageConfig, existing ? readStorage(d, existing) : null);
+    const previous = existing ? readStorage(d, existing) : null;
+    const storage = keepSecrets(storageConfig, previous);
     const token = existing ? undefined : newToken();
     const saved = await repo.saveEnv({
       ...rest,
@@ -635,6 +636,10 @@ export function registerUi(app: FastifyInstance, d: AppDeps): void {
       deployTokenHash: existing ? existing.deployTokenHash : hashToken(token!),
       ...(existing ? { id: existing.id } : {}),
     });
+    if (existing && JSON.stringify(storage) !== JSON.stringify(previous)) {
+      const rs = (await repo.listReleases(existing.id)).filter((r) => r.imageUnpinnedAt === null);
+      if (rs.length) await repo.patchReleases(rs.map((r) => ({ id: r.id, patch: { stored: false } })));
+    }
     return envPage(d, req, reply, saved, { values: toValues(d, saved), errors: {}, isNew: false, deployToken: token, rollingHint: rolling.unknown });
   });
 
